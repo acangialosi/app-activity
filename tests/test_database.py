@@ -141,6 +141,26 @@ class ActivityDatabaseTests(unittest.TestCase):
             [window["title"] for window in app["windows"]],
         )
 
+    def test_report_can_move_to_previous_day(self) -> None:
+        now = datetime.now().astimezone().replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+        yesterday = now.timestamp() - 86400
+        state = ActivityState("Notepad", False)
+        segment_id = self.database.record_sample(
+            None, None, state, yesterday
+        )
+        self.database.record_sample(
+            segment_id, state, state, yesterday + 900
+        )
+
+        current_report = self.database.report("day", now)
+        previous_report = self.database.report("day", now, offset=-1)
+
+        self.assertEqual(0, current_report["active_seconds"])
+        self.assertEqual(900, previous_report["active_seconds"])
+        self.assertEqual(-1, previous_report["offset"])
+
 
 if __name__ == "__main__":
     unittest.main()

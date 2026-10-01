@@ -133,9 +133,14 @@ class ActivityDatabase:
             )
             self._migrated_aliases.add(alias)
 
-    def report(self, period: str, now: datetime | None = None) -> dict[str, Any]:
+    def report(
+        self,
+        period: str,
+        now: datetime | None = None,
+        offset: int = 0,
+    ) -> dict[str, Any]:
         now = now or datetime.now().astimezone()
-        start, end, buckets = _period_bounds(period, now)
+        start, end, buckets = _period_bounds(period, now, offset)
         rows = self._connection().execute(
             """
             SELECT start_ts, end_ts, app_name, is_idle, window_title
@@ -205,6 +210,7 @@ class ActivityDatabase:
         ]
         return {
             "period": period,
+            "offset": offset,
             "label": _period_label(period, start, end),
             "start": start.isoformat(),
             "end": end.isoformat(),
@@ -234,10 +240,12 @@ class ActivityDatabase:
 
 
 def _period_bounds(
-    period: str, now: datetime
+    period: str, now: datetime, offset: int = 0
 ) -> tuple[datetime, datetime, list[dict[str, Any]]]:
     if period == "day":
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = now.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) + timedelta(days=offset)
         end = start + timedelta(days=1)
         buckets = [
             {
@@ -249,7 +257,11 @@ def _period_bounds(
         ]
     elif period == "week":
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        start = day_start - timedelta(days=day_start.weekday())
+        start = (
+            day_start
+            - timedelta(days=day_start.weekday())
+            + timedelta(weeks=offset)
+        )
         end = start + timedelta(days=7)
         buckets = [
             {
@@ -260,7 +272,17 @@ def _period_bounds(
             for day in range(7)
         ]
     elif period == "month":
-        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        month_index = now.year * 12 + now.month - 1 + offset
+        year, zero_based_month = divmod(month_index, 12)
+        start = now.replace(
+            year=year,
+            month=zero_based_month + 1,
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
         _, days = calendar.monthrange(start.year, start.month)
         end = start + timedelta(days=days)
         buckets = [
@@ -273,7 +295,13 @@ def _period_bounds(
         ]
     elif period == "year":
         start = now.replace(
-            month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+            year=now.year + offset,
+            month=1,
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
         )
         end = start.replace(year=start.year + 1)
         buckets = []

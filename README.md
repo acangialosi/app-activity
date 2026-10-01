@@ -17,6 +17,8 @@ day, week, month, and year views in a local browser dashboard.
   details beneath each application.
 - The activity chart uses consistent per-application colors and can switch
   between absolute time and percentage-of-bucket views.
+- Previous and next controls navigate by the selected day, week, month, or year
+  period without mixing data between reporting windows.
 - The collector samples every five seconds and uses Windows APIs plus SQLite.
 - You are considered idle after five minutes without keyboard or mouse input.
 - A dedicated chart icon in the Windows system tray shows when tracking is
