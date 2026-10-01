@@ -22,7 +22,7 @@ button{border:0;border-radius:9px;padding:9px 15px;background:#202b3d;color:var(
 button.active{background:var(--accent);color:#081426}.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 .card{background:var(--card);border:1px solid #253147;border-radius:14px;padding:18px}.metric strong{display:block;font-size:30px;margin-top:5px}
 .grid{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:14px;margin-top:14px}.grid>*{min-width:0}h2{font-size:17px;margin:0 0 18px}
-.timeline{height:230px;display:flex;align-items:end;gap:4px;border-bottom:1px solid #344158;padding-top:15px}
+.timeline{height:230px;display:flex;align-items:end;gap:4px;border-bottom:1px solid #344158;padding-top:15px}.chart-card{display:flex;flex-direction:column}.chart-card .timeline{height:auto;min-height:260px;flex:1}
 .bar-wrap{height:100%;flex:1;display:flex;flex-direction:column;justify-content:end;align-items:center;min-width:0}
 .bar-stack{width:100%;min-height:1px;display:flex;flex-direction:column-reverse;overflow:hidden;border-radius:4px 4px 0 0}.bar-segment{width:100%;min-height:1px}
 .bar-label{font-size:10px;color:var(--muted);height:22px;padding-top:5px;white-space:nowrap}
@@ -43,7 +43,7 @@ button.active{background:var(--accent);color:#081426}.metrics{display:grid;grid-
   <div class="card metric"><span class="muted">Tracked</span><strong id="tracked">-</strong></div>
 </section>
 <section class="grid">
-  <div class="card"><div class="chart-heading"><h2>Active time by application</h2><div class="chart-toggle"><button id="timeMode" class="active" type="button">Total time</button><button id="percentMode" type="button">Percentage</button></div></div><div class="timeline" id="timeline"></div></div>
+  <div class="card chart-card"><div class="chart-heading"><h2>Active time by application</h2><div class="chart-toggle"><button id="timeMode" class="active" type="button">Total time</button><button id="percentMode" type="button">Percentage</button></div></div><div class="timeline" id="timeline"></div></div>
   <div class="card"><h2>Applications</h2><div id="apps"></div></div>
 </section>
 </main>
