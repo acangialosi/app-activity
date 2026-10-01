@@ -15,6 +15,8 @@ day, week, month, and year views in a local browser dashboard.
   application display name when that application is next observed.
 - Reports aggregate time by Product Name and provide expandable per-window-title
   details beneath each application.
+- The activity chart uses consistent per-application colors and can switch
+  between absolute time and percentage-of-bucket views.
 - The collector samples every five seconds and uses Windows APIs plus SQLite.
 - You are considered idle after five minutes without keyboard or mouse input.
 - A dedicated chart icon in the Windows system tray shows when tracking is

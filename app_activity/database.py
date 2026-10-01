@@ -151,6 +151,9 @@ class ActivityDatabase:
             lambda: defaultdict(float)
         )
         bucket_active = [0.0] * len(buckets)
+        bucket_apps: list[dict[str, float]] = [
+            defaultdict(float) for _ in buckets
+        ]
         active_seconds = 0.0
         idle_seconds = 0.0
 
@@ -174,6 +177,7 @@ class ActivityDatabase:
                         - max(segment_start, bucket["start"].timestamp()),
                     )
                     bucket_active[index] += overlap
+                    bucket_apps[index][str(app_name)] += overlap
 
         apps = [
             {
@@ -209,8 +213,22 @@ class ActivityDatabase:
             "tracked_seconds": round(active_seconds + idle_seconds),
             "apps": apps,
             "timeline": [
-                {"label": bucket["label"], "seconds": round(seconds)}
-                for bucket, seconds in zip(buckets, bucket_active)
+                {
+                    "label": bucket["label"],
+                    "seconds": round(seconds),
+                    "apps": [
+                        {"name": name, "seconds": round(app_seconds)}
+                        for name, app_seconds in sorted(
+                            apps.items(),
+                            key=lambda item: item[1],
+                            reverse=True,
+                        )
+                        if app_seconds > 0
+                    ],
+                }
+                for bucket, seconds, apps in zip(
+                    buckets, bucket_active, bucket_apps
+                )
             ],
         }
 

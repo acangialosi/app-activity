@@ -51,6 +51,13 @@ class ActivityDatabaseTests(unittest.TestCase):
             "project.py - Code", report["apps"][0]["windows"][0]["title"]
         )
         self.assertEqual(1800, report["apps"][0]["windows"][0]["seconds"])
+        timeline_app_seconds = sum(
+            app["seconds"]
+            for bucket in report["timeline"]
+            for app in bucket["apps"]
+            if app["name"] == "Code"
+        )
+        self.assertEqual(1800, timeline_app_seconds)
 
     def test_rejects_unknown_period(self) -> None:
         with self.assertRaises(ValueError):
