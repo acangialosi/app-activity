@@ -38,6 +38,15 @@ version.VerQueryValueW.argtypes = [
     ctypes.POINTER(wintypes.UINT),
 ]
 version.VerQueryValueW.restype = wintypes.BOOL
+user32.GetForegroundWindow.restype = wintypes.HWND
+user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+user32.GetWindowTextLengthW.restype = ctypes.c_int
+user32.GetWindowTextW.argtypes = [
+    wintypes.HWND,
+    wintypes.LPWSTR,
+    ctypes.c_int,
+]
+user32.GetWindowTextW.restype = ctypes.c_int
 
 
 def get_activity_state(idle_threshold_seconds: int) -> ActivityState:
@@ -64,10 +73,13 @@ def get_activity_state(idle_threshold_seconds: int) -> ActivityState:
             process, 0, buffer, ctypes.byref(capacity)
         ):
             path = Path(buffer.value)
+            app_name, legacy_names = _application_metadata(path)
             return ActivityState(
-                app_name=_application_name(path),
+                app_name=app_name,
                 is_idle=False,
                 process_name=path.stem or None,
+                window_title=_window_title(window),
+                legacy_names=legacy_names,
             )
     finally:
         kernel32.CloseHandle(process)
@@ -85,13 +97,29 @@ def _idle_seconds() -> float:
 
 @lru_cache(maxsize=256)
 def _application_name(path: Path) -> str:
-    description = _version_string(path, "FileDescription")
-    if description:
-        return description
+    return _application_metadata(path)[0]
+
+
+@lru_cache(maxsize=256)
+def _application_metadata(path: Path) -> tuple[str, tuple[str, ...]]:
     product_name = _version_string(path, "ProductName")
-    if product_name:
-        return product_name
-    return path.stem or "Unknown"
+    description = _version_string(path, "FileDescription")
+    display_name = product_name or description or path.stem or "Unknown"
+    legacy_names = tuple(
+        name
+        for name in (description,)
+        if name and name != display_name
+    )
+    return display_name, legacy_names
+
+
+def _window_title(window: int) -> str:
+    length = user32.GetWindowTextLengthW(window)
+    if length <= 0:
+        return ""
+    buffer = ctypes.create_unicode_buffer(length + 1)
+    copied = user32.GetWindowTextW(window, buffer, len(buffer))
+    return buffer.value.strip() if copied else ""
 
 
 def _version_string(path: Path, field: str) -> str | None:
@@ -135,7 +163,11 @@ def _version_string(path: Path, field: str) -> str | None:
             ctypes.byref(value_pointer),
             ctypes.byref(value_size),
         ):
-            value = ctypes.wstring_at(value_pointer, value_size.value).rstrip("\0").strip()
+            value = (
+                ctypes.wstring_at(value_pointer, value_size.value)
+                .rstrip("\0")
+                .strip()
+            )
             if value:
                 return value
     return None

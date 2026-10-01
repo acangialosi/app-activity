@@ -15,6 +15,8 @@ class ActivityState:
     app_name: str
     is_idle: bool
     process_name: str | None = None
+    window_title: str = ""
+    legacy_names: tuple[str, ...] = ()
 
 
 class ActivityDatabase:
@@ -48,12 +50,26 @@ class ActivityDatabase:
                     start_ts REAL NOT NULL,
                     end_ts REAL NOT NULL,
                     app_name TEXT NOT NULL,
-                    is_idle INTEGER NOT NULL CHECK (is_idle IN (0, 1))
+                    is_idle INTEGER NOT NULL CHECK (is_idle IN (0, 1)),
+                    window_title TEXT NOT NULL DEFAULT ''
                 );
                 CREATE INDEX IF NOT EXISTS idx_segments_time
                     ON activity_segments(start_ts, end_ts);
                 """
             )
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(activity_segments)"
+                )
+            }
+            if "window_title" not in columns:
+                connection.execute(
+                    """
+                    ALTER TABLE activity_segments
+                    ADD COLUMN window_title TEXT NOT NULL DEFAULT ''
+                    """
+                )
             connection.commit()
         finally:
             connection.close()
@@ -83,10 +99,18 @@ class ActivityDatabase:
 
         cursor = connection.execute(
             """
-            INSERT INTO activity_segments(start_ts, end_ts, app_name, is_idle)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO activity_segments(
+                start_ts, end_ts, app_name, is_idle, window_title
+            )
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (sample_ts, sample_ts, state.app_name, int(state.is_idle)),
+            (
+                sample_ts,
+                sample_ts,
+                state.app_name,
+                int(state.is_idle),
+                state.window_title,
+            ),
         )
         connection.commit()
         return int(cursor.lastrowid)
@@ -94,26 +118,27 @@ class ActivityDatabase:
     def _migrate_process_name(
         self, connection: sqlite3.Connection, state: ActivityState
     ) -> None:
-        process_name = state.process_name
-        alias = (process_name, state.app_name) if process_name else None
-        if (
-            alias is None
-            or process_name == state.app_name
-            or alias in self._migrated_aliases
-        ):
-            return
-        connection.execute(
-            "UPDATE activity_segments SET app_name = ? WHERE app_name = ?",
-            (state.app_name, process_name),
-        )
-        self._migrated_aliases.add(alias)
+        aliases = (state.process_name, *state.legacy_names)
+        for old_name in aliases:
+            alias = (old_name, state.app_name) if old_name else None
+            if (
+                alias is None
+                or old_name == state.app_name
+                or alias in self._migrated_aliases
+            ):
+                continue
+            connection.execute(
+                "UPDATE activity_segments SET app_name = ? WHERE app_name = ?",
+                (state.app_name, old_name),
+            )
+            self._migrated_aliases.add(alias)
 
     def report(self, period: str, now: datetime | None = None) -> dict[str, Any]:
         now = now or datetime.now().astimezone()
         start, end, buckets = _period_bounds(period, now)
         rows = self._connection().execute(
             """
-            SELECT start_ts, end_ts, app_name, is_idle
+            SELECT start_ts, end_ts, app_name, is_idle, window_title
             FROM activity_segments
             WHERE end_ts >= ? AND start_ts < ?
             ORDER BY start_ts
@@ -122,11 +147,14 @@ class ActivityDatabase:
         ).fetchall()
 
         app_seconds: dict[str, float] = defaultdict(float)
+        window_seconds: dict[str, dict[str, float]] = defaultdict(
+            lambda: defaultdict(float)
+        )
         bucket_active = [0.0] * len(buckets)
         active_seconds = 0.0
         idle_seconds = 0.0
 
-        for start_ts, end_ts, app_name, is_idle in rows:
+        for start_ts, end_ts, app_name, is_idle, window_title in rows:
             segment_start = max(float(start_ts), start.timestamp())
             segment_end = min(float(end_ts), end.timestamp())
             duration = max(0.0, segment_end - segment_start)
@@ -137,6 +165,8 @@ class ActivityDatabase:
             else:
                 active_seconds += duration
                 app_seconds[str(app_name)] += duration
+                if window_title:
+                    window_seconds[str(app_name)][str(window_title)] += duration
                 for index, bucket in enumerate(buckets):
                     overlap = max(
                         0.0,
@@ -152,6 +182,18 @@ class ActivityDatabase:
                 "percent": round(seconds * 100 / active_seconds, 1)
                 if active_seconds
                 else 0,
+                "windows": [
+                    {
+                        "title": title,
+                        "seconds": round(title_seconds),
+                        "percent": round(title_seconds * 100 / seconds, 1),
+                    }
+                    for title, title_seconds in sorted(
+                        window_seconds[name].items(),
+                        key=lambda item: item[1],
+                        reverse=True,
+                    )
+                ],
             }
             for name, seconds in sorted(
                 app_seconds.items(), key=lambda item: item[1], reverse=True

@@ -26,7 +26,8 @@ button.active{background:var(--accent);color:#081426}.metrics{display:grid;grid-
 .bar-wrap{height:100%;flex:1;display:flex;flex-direction:column;justify-content:end;align-items:center;min-width:0}
 .bar{width:100%;min-height:1px;background:linear-gradient(#8bb7ff,#518af0);border-radius:4px 4px 0 0}
 .bar-label{font-size:10px;color:var(--muted);height:22px;padding-top:5px;white-space:nowrap}
-.app{margin:14px 0}.app-head{display:flex;justify-content:space-between;gap:12px}.track{height:7px;background:#273249;border-radius:9px;margin-top:7px;overflow:hidden}
+.app{margin:14px 0}.app summary{cursor:pointer;list-style:none}.app summary::-webkit-details-marker{display:none}.app-head{display:flex;justify-content:space-between;gap:12px}.track{height:7px;background:#273249;border-radius:9px;margin-top:7px;overflow:hidden}
+.windows{border-left:2px solid #344158;margin:10px 0 0 7px;padding-left:12px}.window{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:13px;margin:8px 0}.window-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fill{height:100%;background:var(--accent);border-radius:9px}.empty{color:var(--muted);padding:30px 0;text-align:center}
 @media(max-width:750px){header{align-items:start;flex-direction:column}.metrics,.grid{grid-template-columns:1fr}.timeline{height:180px}}
 </style>
@@ -50,7 +51,7 @@ const fmt=s=>{const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h?`${h
 function nav(){periods.forEach(p=>{const b=document.createElement("button");b.textContent=p[0].toUpperCase()+p.slice(1);b.className=p===selected?"active":"";b.onclick=()=>{selected=p;document.querySelectorAll("nav button").forEach(x=>x.className="");b.className="active";load()};periodsEl.appendChild(b)})}
 async function load(){const r=await fetch(`/api/report?period=${selected}`),d=await r.json();label.textContent=d.label;active.textContent=fmt(d.active_seconds);idle.textContent=fmt(d.idle_seconds);tracked.textContent=fmt(d.tracked_seconds);
  const max=Math.max(...d.timeline.map(x=>x.seconds),1);timeline.innerHTML=d.timeline.map((x,i)=>`<div class="bar-wrap" title="${x.label}: ${fmt(x.seconds)}"><div class="bar" style="height:${Math.max(1,x.seconds/max*100)}%"></div><div class="bar-label">${selected==="month"&&i%3?"":x.label}</div></div>`).join("");
- apps.innerHTML=d.apps.length?d.apps.slice(0,15).map(x=>`<div class="app"><div class="app-head"><span>${escapeHtml(x.name)}</span><span>${fmt(x.seconds)} · ${x.percent}%</span></div><div class="track"><div class="fill" style="width:${x.percent}%"></div></div></div>`).join(""):`<div class="empty">No activity recorded yet.</div>`}
+ apps.innerHTML=d.apps.length?d.apps.slice(0,15).map(x=>{const head=`<div class="app-head"><span>${escapeHtml(x.name)}</span><span>${fmt(x.seconds)} · ${x.percent}%</span></div><div class="track"><div class="fill" style="width:${x.percent}%"></div></div>`;if(!x.windows.length)return `<div class="app">${head}</div>`;const windows=x.windows.slice(0,20).map(w=>`<div class="window" title="${escapeHtml(w.title)}"><span class="window-title">${escapeHtml(w.title)}</span><span>${fmt(w.seconds)} · ${w.percent}%</span></div>`).join("");return `<details class="app"><summary>${head}</summary><div class="windows">${windows}</div></details>`}).join(""):`<div class="empty">No activity recorded yet.</div>`}
 function escapeHtml(v){const e=document.createElement("div");e.textContent=v;return e.innerHTML}
 const periodsEl=document.getElementById("periods");nav();load();setInterval(load,60000);
 </script></body></html>"""
