@@ -108,6 +108,7 @@ class ActivityDatabaseTests(unittest.TestCase):
             )
         }
         self.assertIn("window_title", columns)
+        self.assertIn("detail_key", columns)
 
     def test_report_groups_multiple_titles_under_one_app(self) -> None:
         now = datetime.now().astimezone().replace(
@@ -160,6 +161,114 @@ class ActivityDatabaseTests(unittest.TestCase):
         self.assertEqual(0, current_report["active_seconds"])
         self.assertEqual(900, previous_report["active_seconds"])
         self.assertEqual(-1, previous_report["offset"])
+
+    def test_terminal_title_changes_remain_one_window(self) -> None:
+        now = datetime.now().astimezone().replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+        first = ActivityState(
+            "Windows Terminal",
+            False,
+            "WindowsTerminal",
+            "Copilot - Planning",
+            "window:100",
+        )
+        second = ActivityState(
+            "Windows Terminal",
+            False,
+            "WindowsTerminal",
+            "Copilot - Implementing",
+            "window:100",
+        )
+        first_id = self.database.record_sample(
+            None, None, first, now.timestamp()
+        )
+        self.database.record_sample(
+            first_id, first, first, now.timestamp() + 300
+        )
+        second_id = self.database.record_sample(
+            None, None, second, now.timestamp() + 300
+        )
+        self.database.record_sample(
+            second_id, second, second, now.timestamp() + 600
+        )
+
+        windows = self.database.report("day", now)["apps"][0]["windows"]
+
+        self.assertEqual(1, len(windows))
+        self.assertEqual("Copilot - Implementing", windows[0]["title"])
+        self.assertEqual(600, windows[0]["seconds"])
+
+    def test_edge_title_changes_remain_distinct_tabs(self) -> None:
+        now = datetime.now().astimezone().replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+        first = ActivityState(
+            "Microsoft Edge",
+            False,
+            "msedge",
+            "First page - Microsoft Edge",
+            "tab:200:First page - Microsoft Edge",
+        )
+        second = ActivityState(
+            "Microsoft Edge",
+            False,
+            "msedge",
+            "Second page - Microsoft Edge",
+            "tab:200:Second page - Microsoft Edge",
+        )
+        first_id = self.database.record_sample(
+            None, None, first, now.timestamp()
+        )
+        self.database.record_sample(
+            first_id, first, first, now.timestamp() + 300
+        )
+        second_id = self.database.record_sample(
+            None, None, second, now.timestamp() + 300
+        )
+        self.database.record_sample(
+            second_id, second, second, now.timestamp() + 600
+        )
+
+        windows = self.database.report("day", now)["apps"][0]["windows"]
+
+        self.assertEqual(2, len(windows))
+
+    def test_edge_legacy_and_current_records_with_same_title_are_merged(
+        self,
+    ) -> None:
+        now = datetime.now().astimezone().replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+        title = "App Activity - Microsoft Edge"
+        legacy = ActivityState(
+            "Microsoft Edge", False, "msedge", title
+        )
+        current = ActivityState(
+            "Microsoft Edge",
+            False,
+            "msedge",
+            title,
+            f"tab:200:{title}",
+        )
+        legacy_id = self.database.record_sample(
+            None, None, legacy, now.timestamp()
+        )
+        self.database.record_sample(
+            legacy_id, legacy, legacy, now.timestamp() + 300
+        )
+        current_id = self.database.record_sample(
+            None, None, current, now.timestamp() + 300
+        )
+        self.database.record_sample(
+            current_id, current, current, now.timestamp() + 600
+        )
+
+        windows = self.database.report("day", now)["apps"][0]["windows"]
+
+        self.assertEqual(1, len(windows))
+        self.assertEqual(title, windows[0]["title"])
+        self.assertEqual(600, windows[0]["seconds"])
 
 
 if __name__ == "__main__":

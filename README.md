@@ -15,6 +15,8 @@ day, week, month, and year views in a local browser dashboard.
   application display name when that application is next observed.
 - Reports aggregate time by Product Name and provide expandable per-window-title
   details beneath each application.
+- Non-browser applications group changing titles by their stable Windows window.
+  Browsers group by window and active page title so tab usage remains distinct.
 - The activity chart uses consistent per-application colors and can switch
   between absolute time and percentage-of-bucket views.
 - Previous and next controls navigate by the selected day, week, month, or year
@@ -50,6 +52,24 @@ and starts it immediately. The dashboard is available only on this machine at
 ```
 
 Uninstalling preserves history unless `--delete-data` is included.
+
+### Packaged Windows installer
+
+Release builds provide `AppActivity-Setup.exe`, a per-user installer that
+includes the Python runtime and requires no separate Python installation. It
+installs under `%LOCALAPPDATA%\Programs\AppActivity`, registers sign-in startup,
+adds Start Menu shortcuts, and preserves activity history during uninstall.
+
+To build the installer:
+
+```powershell
+winget install JRSoftware.InnoSetup
+.\build.ps1
+```
+
+The output is `artifacts\AppActivity-Setup.exe`. Set
+`SIGNING_CERTIFICATE_PATH` and optionally `SIGNING_CERTIFICATE_PASSWORD` to
+Authenticode-sign the application and installer during the build.
 
 ## Development
 

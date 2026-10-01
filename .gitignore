@@ -8,3 +8,6 @@ __pycache__/
 venv/
 .idea/
 .vscode/
+build/
+dist/
+artifacts/

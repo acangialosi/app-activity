@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .app_classification import uses_title_details
+
 
 @dataclass(frozen=True)
 class ActivityState:
@@ -16,6 +18,7 @@ class ActivityState:
     is_idle: bool
     process_name: str | None = None
     window_title: str = ""
+    detail_key: str = ""
     legacy_names: tuple[str, ...] = ()
 
 
@@ -24,6 +27,7 @@ class ActivityDatabase:
         self.path = path
         self._local = threading.local()
         self._migrated_aliases: set[tuple[str, str]] = set()
+        self._migrated_detail_apps: set[str] = set()
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -51,7 +55,8 @@ class ActivityDatabase:
                     end_ts REAL NOT NULL,
                     app_name TEXT NOT NULL,
                     is_idle INTEGER NOT NULL CHECK (is_idle IN (0, 1)),
-                    window_title TEXT NOT NULL DEFAULT ''
+                    window_title TEXT NOT NULL DEFAULT '',
+                    detail_key TEXT NOT NULL DEFAULT ''
                 );
                 CREATE INDEX IF NOT EXISTS idx_segments_time
                     ON activity_segments(start_ts, end_ts);
@@ -68,6 +73,13 @@ class ActivityDatabase:
                     """
                     ALTER TABLE activity_segments
                     ADD COLUMN window_title TEXT NOT NULL DEFAULT ''
+                    """
+                )
+            if "detail_key" not in columns:
+                connection.execute(
+                    """
+                    ALTER TABLE activity_segments
+                    ADD COLUMN detail_key TEXT NOT NULL DEFAULT ''
                     """
                 )
             connection.commit()
@@ -89,6 +101,7 @@ class ActivityDatabase:
     ) -> int:
         connection = self._connection()
         self._migrate_process_name(connection, state)
+        self._migrate_legacy_details(connection, state)
         if previous_segment_id is not None and previous_state == state:
             connection.execute(
                 "UPDATE activity_segments SET end_ts = ? WHERE id = ?",
@@ -101,8 +114,9 @@ class ActivityDatabase:
             """
             INSERT INTO activity_segments(
                 start_ts, end_ts, app_name, is_idle, window_title
+                , detail_key
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 sample_ts,
@@ -110,6 +124,7 @@ class ActivityDatabase:
                 state.app_name,
                 int(state.is_idle),
                 state.window_title,
+                state.detail_key,
             ),
         )
         connection.commit()
@@ -133,6 +148,25 @@ class ActivityDatabase:
             )
             self._migrated_aliases.add(alias)
 
+    def _migrate_legacy_details(
+        self, connection: sqlite3.Connection, state: ActivityState
+    ) -> None:
+        if (
+            not state.detail_key
+            or uses_title_details(state.app_name)
+            or state.app_name in self._migrated_detail_apps
+        ):
+            return
+        connection.execute(
+            """
+            UPDATE activity_segments
+            SET detail_key = ?
+            WHERE app_name = ? AND detail_key = '' AND window_title != ''
+            """,
+            (state.detail_key, state.app_name),
+        )
+        self._migrated_detail_apps.add(state.app_name)
+
     def report(
         self,
         period: str,
@@ -143,7 +177,8 @@ class ActivityDatabase:
         start, end, buckets = _period_bounds(period, now, offset)
         rows = self._connection().execute(
             """
-            SELECT start_ts, end_ts, app_name, is_idle, window_title
+            SELECT
+                start_ts, end_ts, app_name, is_idle, window_title, detail_key
             FROM activity_segments
             WHERE end_ts >= ? AND start_ts < ?
             ORDER BY start_ts
@@ -152,9 +187,10 @@ class ActivityDatabase:
         ).fetchall()
 
         app_seconds: dict[str, float] = defaultdict(float)
-        window_seconds: dict[str, dict[str, float]] = defaultdict(
+        detail_seconds: dict[str, dict[str, float]] = defaultdict(
             lambda: defaultdict(float)
         )
+        detail_labels: dict[str, dict[str, str]] = defaultdict(dict)
         bucket_active = [0.0] * len(buckets)
         bucket_apps: list[dict[str, float]] = [
             defaultdict(float) for _ in buckets
@@ -162,7 +198,14 @@ class ActivityDatabase:
         active_seconds = 0.0
         idle_seconds = 0.0
 
-        for start_ts, end_ts, app_name, is_idle, window_title in rows:
+        for (
+            start_ts,
+            end_ts,
+            app_name,
+            is_idle,
+            window_title,
+            detail_key,
+        ) in rows:
             segment_start = max(float(start_ts), start.timestamp())
             segment_end = min(float(end_ts), end.timestamp())
             duration = max(0.0, segment_end - segment_start)
@@ -174,7 +217,13 @@ class ActivityDatabase:
                 active_seconds += duration
                 app_seconds[str(app_name)] += duration
                 if window_title:
-                    window_seconds[str(app_name)][str(window_title)] += duration
+                    key = _report_detail_key(
+                        str(app_name),
+                        str(window_title),
+                        str(detail_key),
+                    )
+                    detail_seconds[str(app_name)][key] += duration
+                    detail_labels[str(app_name)][key] = str(window_title)
                 for index, bucket in enumerate(buckets):
                     overlap = max(
                         0.0,
@@ -197,11 +246,12 @@ class ActivityDatabase:
                         "seconds": round(title_seconds),
                         "percent": round(title_seconds * 100 / seconds, 1),
                     }
-                    for title, title_seconds in sorted(
-                        window_seconds[name].items(),
+                    for key, title_seconds in sorted(
+                        detail_seconds[name].items(),
                         key=lambda item: item[1],
                         reverse=True,
                     )
+                    for title in [detail_labels[name][key]]
                 ],
             }
             for name, seconds in sorted(
@@ -237,6 +287,20 @@ class ActivityDatabase:
                 )
             ],
         }
+
+
+def _legacy_detail_key(app_name: str, window_title: str) -> str:
+    if uses_title_details(app_name):
+        return f"legacy-title:{window_title}"
+    return "legacy-window"
+
+
+def _report_detail_key(
+    app_name: str, window_title: str, detail_key: str
+) -> str:
+    if uses_title_details(app_name):
+        return f"title:{window_title}"
+    return detail_key or _legacy_detail_key(app_name, window_title)
 
 
 def _period_bounds(

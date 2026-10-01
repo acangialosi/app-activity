@@ -1,0 +1,47 @@
+name: Windows installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress --yes
+
+      - name: Prepare signing certificate
+        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        shell: powershell
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $certificate = Join-Path $env:RUNNER_TEMP "app-activity-signing.pfx"
+          [IO.File]::WriteAllBytes(
+            $certificate,
+            [Convert]::FromBase64String($env:CERTIFICATE_BASE64)
+          )
+          "SIGNING_CERTIFICATE_PATH=$certificate" >> $env:GITHUB_ENV
+          "SIGNING_CERTIFICATE_PASSWORD=$env:CERTIFICATE_PASSWORD" >> $env:GITHUB_ENV
+
+      - name: Build installer
+        shell: powershell
+        run: .\build.ps1
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppActivity-Windows-Installer
+          path: artifacts/AppActivity-Setup.exe
+          if-no-files-found: error

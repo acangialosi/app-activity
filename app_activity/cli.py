@@ -19,6 +19,7 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_VALUE = "AppActivity"
 ROOT = Path(__file__).resolve().parent.parent
 HIDDEN_RUNNER = ROOT / "run_hidden.pyw"
+IS_FROZEN = bool(getattr(sys, "frozen", False))
 
 
 def main() -> None:
@@ -78,16 +79,15 @@ def start_service() -> bool:
     if is_running():
         return False
     STOP_PATH.unlink(missing_ok=True)
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    executable = pythonw if pythonw.exists() else Path(sys.executable)
+    command, working_directory = _service_command()
     creation_flags = (
         getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         | getattr(subprocess, "DETACHED_PROCESS", 0)
         | getattr(subprocess, "CREATE_NO_WINDOW", 0)
     )
     subprocess.Popen(
-        [str(executable), str(HIDDEN_RUNNER)],
-        cwd=ROOT,
+        command,
+        cwd=working_directory,
         creationflags=creation_flags,
         close_fds=True,
     )
@@ -134,9 +134,8 @@ def wait_until_ready() -> bool:
 
 
 def install_startup() -> None:
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    executable = pythonw if pythonw.exists() else Path(sys.executable)
-    command = f'"{executable}" "{HIDDEN_RUNNER}"'
+    service_command, _ = _service_command()
+    command = subprocess.list2cmdline(service_command)
     with winreg.OpenKey(
         winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE
     ) as key:
@@ -162,3 +161,12 @@ def startup_enabled() -> bool:
         return True
     except FileNotFoundError:
         return False
+
+
+def _service_command() -> tuple[list[str], Path]:
+    if IS_FROZEN:
+        executable = Path(sys.executable).resolve()
+        return [str(executable), "run"], executable.parent
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    executable = pythonw if pythonw.exists() else Path(sys.executable)
+    return [str(executable), str(HIDDEN_RUNNER)], ROOT

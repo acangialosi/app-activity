@@ -5,6 +5,7 @@ from ctypes import wintypes
 from functools import lru_cache
 from pathlib import Path
 
+from .app_classification import uses_title_details
 from .database import ActivityState
 
 
@@ -74,11 +75,13 @@ def get_activity_state(idle_threshold_seconds: int) -> ActivityState:
         ):
             path = Path(buffer.value)
             app_name, legacy_names = _application_metadata(path)
+            window_title = _window_title(window)
             return ActivityState(
                 app_name=app_name,
                 is_idle=False,
                 process_name=path.stem or None,
-                window_title=_window_title(window),
+                window_title=window_title,
+                detail_key=_detail_key(app_name, int(window), window_title),
                 legacy_names=legacy_names,
             )
     finally:
@@ -120,6 +123,12 @@ def _window_title(window: int) -> str:
     buffer = ctypes.create_unicode_buffer(length + 1)
     copied = user32.GetWindowTextW(window, buffer, len(buffer))
     return buffer.value.strip() if copied else ""
+
+
+def _detail_key(app_name: str, window: int, window_title: str) -> str:
+    if uses_title_details(app_name) and window_title:
+        return f"tab:{window}:{window_title}"
+    return f"window:{window}"
 
 
 def _version_string(path: Path, field: str) -> str | None:

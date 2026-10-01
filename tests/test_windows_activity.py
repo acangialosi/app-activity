@@ -4,7 +4,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app_activity.windows_activity import _application_metadata, _application_name
+from app_activity.app_classification import uses_title_details
+from app_activity.windows_activity import (
+    _application_metadata,
+    _application_name,
+    _detail_key,
+)
 
 
 class ApplicationNameTests(unittest.TestCase):
@@ -49,6 +54,24 @@ class ApplicationNameTests(unittest.TestCase):
             "app_activity.windows_activity._version_string", return_value=None
         ):
             self.assertEqual("custom-tool", _application_name(Path("custom-tool.exe")))
+
+    def test_terminal_detail_uses_stable_window_identity(self) -> None:
+        first = _detail_key("Windows Terminal", 100, "Copilot - Planning")
+        second = _detail_key("Windows Terminal", 100, "Copilot - Implementing")
+
+        self.assertEqual(first, second)
+
+    def test_edge_detail_uses_window_and_title(self) -> None:
+        first = _detail_key("Microsoft Edge", 200, "First page")
+        second = _detail_key("Microsoft Edge", 200, "Second page")
+
+        self.assertNotEqual(first, second)
+
+    def test_browser_classification_does_not_match_partial_product_names(
+        self,
+    ) -> None:
+        self.assertTrue(uses_title_details("Microsoft Edge"))
+        self.assertFalse(uses_title_details("ArcGIS Pro"))
 
 
 if __name__ == "__main__":
