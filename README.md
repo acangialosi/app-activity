@@ -7,8 +7,9 @@ day, week, month, and year views in a local browser dashboard.
 ## Privacy and performance
 
 - All history stays in `%LOCALAPPDATA%\AppActivity\activity.db`.
-- Only application executable names and timestamps are stored. Window titles,
-  typed text, screenshots, and document contents are never collected.
+- Only application display names and timestamps are stored. Display names come
+  from Windows executable metadata; window titles, typed text, screenshots, and
+  document contents are never collected.
 - The collector samples every five seconds and uses Windows APIs plus SQLite.
 - You are considered idle after five minutes without keyboard or mouse input.
 - A dedicated chart icon in the Windows system tray shows when tracking is
