@@ -14,12 +14,14 @@ from typing import Any
 class ActivityState:
     app_name: str
     is_idle: bool
+    process_name: str | None = None
 
 
 class ActivityDatabase:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._local = threading.local()
+        self._migrated_aliases: set[tuple[str, str]] = set()
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -70,6 +72,7 @@ class ActivityDatabase:
         sample_ts: float,
     ) -> int:
         connection = self._connection()
+        self._migrate_process_name(connection, state)
         if previous_segment_id is not None and previous_state == state:
             connection.execute(
                 "UPDATE activity_segments SET end_ts = ? WHERE id = ?",
@@ -87,6 +90,23 @@ class ActivityDatabase:
         )
         connection.commit()
         return int(cursor.lastrowid)
+
+    def _migrate_process_name(
+        self, connection: sqlite3.Connection, state: ActivityState
+    ) -> None:
+        process_name = state.process_name
+        alias = (process_name, state.app_name) if process_name else None
+        if (
+            alias is None
+            or process_name == state.app_name
+            or alias in self._migrated_aliases
+        ):
+            return
+        connection.execute(
+            "UPDATE activity_segments SET app_name = ? WHERE app_name = ?",
+            (state.app_name, process_name),
+        )
+        self._migrated_aliases.add(alias)
 
     def report(self, period: str, now: datetime | None = None) -> dict[str, Any]:
         now = now or datetime.now().astimezone()

@@ -63,8 +63,11 @@ def get_activity_state(idle_threshold_seconds: int) -> ActivityState:
         if kernel32.QueryFullProcessImageNameW(
             process, 0, buffer, ctypes.byref(capacity)
         ):
+            path = Path(buffer.value)
             return ActivityState(
-                app_name=_application_name(Path(buffer.value)), is_idle=False
+                app_name=_application_name(path),
+                is_idle=False,
+                process_name=path.stem or None,
             )
     finally:
         kernel32.CloseHandle(process)

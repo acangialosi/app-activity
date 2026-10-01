@@ -10,6 +10,8 @@ day, week, month, and year views in a local browser dashboard.
 - Only application display names and timestamps are stored. Display names come
   from Windows executable metadata; window titles, typed text, screenshots, and
   document contents are never collected.
+- Historical process-name entries are automatically merged into their resolved
+  application display name when that application is next observed.
 - The collector samples every five seconds and uses Windows APIs plus SQLite.
 - You are considered idle after five minutes without keyboard or mouse input.
 - A dedicated chart icon in the Windows system tray shows when tracking is

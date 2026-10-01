@@ -52,6 +52,19 @@ class ActivityDatabaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.database.report("decade")
 
+    def test_resolved_name_migrates_historical_process_name(self) -> None:
+        legacy = ActivityState("msedge", False)
+        legacy_id = self.database.record_sample(None, None, legacy, 100)
+        self.database.record_sample(legacy_id, legacy, legacy, 130)
+        resolved = ActivityState("Microsoft Edge", False, "msedge")
+
+        self.database.record_sample(None, None, resolved, 140)
+
+        names = self.database._connection().execute(
+            "SELECT DISTINCT app_name FROM activity_segments"
+        ).fetchall()
+        self.assertEqual([("Microsoft Edge",)], names)
+
 
 if __name__ == "__main__":
     unittest.main()
