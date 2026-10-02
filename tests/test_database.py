@@ -245,6 +245,57 @@ class ActivityDatabaseTests(unittest.TestCase):
         self.assertEqual(900, previous_report["active_seconds"])
         self.assertEqual(-1, previous_report["offset"])
 
+    def test_hour_report_uses_five_minute_buckets(self) -> None:
+        now = datetime.now().astimezone().replace(
+            hour=12, minute=30, second=0, microsecond=0
+        )
+        state = ActivityState("Code", False)
+        segment_id = self.database.record_sample(
+            None, None, state, now.replace(minute=5).timestamp()
+        )
+        self.database.record_sample(
+            segment_id,
+            state,
+            state,
+            now.replace(minute=15).timestamp(),
+        )
+
+        report = self.database.report("hour", now)
+
+        self.assertEqual(600, report["active_seconds"])
+        self.assertEqual(12, len(report["timeline"]))
+        self.assertEqual(
+            ["12:00", "12:05", "12:10"],
+            [bucket["label"] for bucket in report["timeline"][:3]],
+        )
+        self.assertEqual(
+            600,
+            sum(bucket["seconds"] for bucket in report["timeline"]),
+        )
+
+    def test_hour_report_can_move_to_previous_hour(self) -> None:
+        now = datetime.now().astimezone().replace(
+            hour=12, minute=30, second=0, microsecond=0
+        )
+        previous_hour = now.replace(
+            hour=11, minute=10
+        ).timestamp()
+        state = ActivityState("Code", False)
+        segment_id = self.database.record_sample(
+            None, None, state, previous_hour
+        )
+        self.database.record_sample(
+            segment_id, state, state, previous_hour + 300
+        )
+
+        current_report = self.database.report("hour", now)
+        previous_report = self.database.report("hour", now, offset=-1)
+
+        self.assertEqual(0, current_report["active_seconds"])
+        self.assertEqual(300, previous_report["active_seconds"])
+        self.assertEqual(-1, previous_report["offset"])
+        self.assertIn("11:00 AM - 12:00 PM", previous_report["label"])
+
     def test_terminal_title_changes_remain_one_window(self) -> None:
         now = datetime.now().astimezone().replace(
             hour=12, minute=0, second=0, microsecond=0

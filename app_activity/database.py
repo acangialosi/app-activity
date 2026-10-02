@@ -325,7 +325,22 @@ def _report_detail_key(
 def _period_bounds(
     period: str, now: datetime, offset: int = 0
 ) -> tuple[datetime, datetime, list[dict[str, Any]]]:
-    if period == "day":
+    if period == "hour":
+        start = now.replace(
+            minute=0, second=0, microsecond=0
+        ) + timedelta(hours=offset)
+        end = start + timedelta(hours=1)
+        buckets = [
+            {
+                "start": start + timedelta(minutes=minute),
+                "end": start + timedelta(minutes=minute + 5),
+                "label": (
+                    start + timedelta(minutes=minute)
+                ).strftime("%H:%M"),
+            }
+            for minute in range(0, 60, 5)
+        ]
+    elif period == "day":
         start = now.replace(
             hour=0, minute=0, second=0, microsecond=0
         ) + timedelta(days=offset)
@@ -408,6 +423,13 @@ def _period_bounds(
 
 
 def _period_label(period: str, start: datetime, end: datetime) -> str:
+    if period == "hour":
+        start_time = start.strftime("%I:%M %p").lstrip("0")
+        end_time = end.strftime("%I:%M %p").lstrip("0")
+        return (
+            f"{start.strftime('%A, %B %d, %Y')} · "
+            f"{start_time} - {end_time}"
+        )
     if period == "day":
         return start.strftime("%A, %B %d, %Y")
     if period == "week":

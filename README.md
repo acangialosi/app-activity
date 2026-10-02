@@ -2,7 +2,7 @@
 
 A lightweight, local-only Windows activity tracker. It records which application
 has the foreground window, separates active time from idle time, and provides
-day, week, month, and year views in a local browser dashboard.
+hour, day, week, month, and year views in a local browser dashboard.
 
 ## Privacy and performance
 
@@ -19,8 +19,9 @@ day, week, month, and year views in a local browser dashboard.
   Browsers group by window and active page title so tab usage remains distinct.
 - The activity chart uses consistent per-application colors and can switch
   between absolute time and percentage-of-bucket views.
-- Previous and next controls navigate by the selected day, week, month, or year
-  period without mixing data between reporting windows.
+- Previous and next controls navigate by the selected hour, day, week, month,
+  or year period without mixing data between reporting windows. The hour view
+  uses five-minute timeline buckets.
 - The collector samples every five seconds and uses Windows APIs plus SQLite.
 - You are considered idle after five minutes without keyboard or mouse input.
 - The Windows lock screen, sign-in and credential surfaces, Windows desktop,

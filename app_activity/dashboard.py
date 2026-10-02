@@ -48,9 +48,9 @@ button.active{background:var(--accent);color:#081426}.metrics{display:grid;grid-
 </section>
 </main>
 <script>
-const periods=["day","week","month","year"];let selected="day",periodOffset=0,chartMode="time",currentData=null,colors=new Map();
+const periods=["hour","day","week","month","year"];let selected="day",periodOffset=0,chartMode="time",currentData=null,colors=new Map();
 const palette=["#72a7ff","#5ed6a7","#f6c85f","#ef7b7b","#bd8cff","#5bc0eb","#ff9f68","#8bd450","#e66fbb","#9ca7ff","#4fd1c5","#d4a373"];
-const fmt=s=>{const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h?`${h}h ${m}m`:`${m}m`};
+const fmt=s=>{const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h?`${h}h ${m}m`:m?`${m}m`:`${Math.round(s)}s`};
 function nav(){periods.forEach(p=>{const b=document.createElement("button");b.textContent=p[0].toUpperCase()+p.slice(1);b.className=p===selected?"active":"";b.onclick=()=>{selected=p;periodOffset=0;document.querySelectorAll("nav button").forEach(x=>x.className="");b.className="active";load()};periodsEl.appendChild(b)})}
 function setChartMode(mode){chartMode=mode;timeMode.className=mode==="time"?"active":"";percentMode.className=mode==="percent"?"active":"";if(currentData)renderChart(currentData)}
 function renderChart(d){const max=Math.max(...d.timeline.map(x=>x.seconds),1);timeline.innerHTML=d.timeline.map((x,i)=>{const segments=x.apps.map(a=>{const share=a.seconds/Math.max(x.seconds,1)*100;const tip=chartMode==="percent"?`${a.name}: ${share.toFixed(1)}%`:`${a.name}: ${fmt(a.seconds)}`;return `<div class="bar-segment" title="${escapeHtml(tip)}" style="height:${share}%;background:${colors.get(a.name)||palette[0]}"></div>`}).join("");const height=chartMode==="percent"?(x.seconds?100:1):Math.max(1,x.seconds/max*100);const totalTip=chartMode==="percent"?`${x.label}: application share`:`${x.label}: ${fmt(x.seconds)}`;return `<div class="bar-wrap" title="${escapeHtml(totalTip)}"><div class="bar-stack" style="height:${height}%">${segments}</div><div class="bar-label">${selected==="month"&&i%3?"":x.label}</div></div>`}).join("")}
