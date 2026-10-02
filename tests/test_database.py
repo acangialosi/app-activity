@@ -141,6 +141,58 @@ class ActivityDatabaseTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(("Idle", 1, "", ""), row)
 
+    def test_migrates_existing_desktop_and_sign_in_segments_to_idle(
+        self,
+    ) -> None:
+        connection = self.database._connection()
+        connection.executemany(
+            """
+            INSERT INTO activity_segments(
+                start_ts, end_ts, app_name, is_idle, window_title, detail_key
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    100,
+                    130,
+                    "Windows Explorer",
+                    0,
+                    "Program Manager",
+                    "window:100",
+                ),
+                (
+                    130,
+                    160,
+                    "Windows Logon User Interface Host",
+                    0,
+                    "",
+                    "window:200",
+                ),
+                (
+                    160,
+                    190,
+                    "Credential UI Broker",
+                    0,
+                    "",
+                    "window:300",
+                ),
+            ],
+        )
+        connection.commit()
+        self.database.close()
+
+        self.database = ActivityDatabase(self.database.path)
+
+        rows = self.database._connection().execute(
+            """
+            SELECT app_name, is_idle, window_title, detail_key
+            FROM activity_segments
+            ORDER BY start_ts
+            """
+        ).fetchall()
+        self.assertEqual([("Idle", 1, "", "")] * 3, rows)
+
     def test_report_groups_multiple_titles_under_one_app(self) -> None:
         now = datetime.now().astimezone().replace(
             hour=12, minute=0, second=0, microsecond=0

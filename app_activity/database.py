@@ -91,6 +91,14 @@ class ActivityDatabase:
                     detail_key = ''
                 WHERE lower(app_name) = 'windows default lock screen'
                    OR lower(window_title) = 'windows default lock screen'
+                   OR lower(app_name) = 'program manager'
+                   OR lower(window_title) = 'program manager'
+                   OR lower(app_name) = 'desktop'
+                   OR lower(window_title) = 'desktop'
+                   OR lower(app_name) = 'windows logon user interface host'
+                   OR lower(window_title) = 'windows logon user interface host'
+                   OR lower(app_name) = 'credential ui broker'
+                   OR lower(window_title) = 'credential ui broker'
                 """
             )
             connection.commit()

@@ -50,7 +50,12 @@ user32.GetWindowTextW.argtypes = [
 user32.GetWindowTextW.restype = ctypes.c_int
 
 
-def get_activity_state(idle_threshold_seconds: int) -> ActivityState:
+def get_activity_state(
+    idle_threshold_seconds: int, display_is_off: bool = False
+) -> ActivityState:
+    if display_is_off:
+        return ActivityState(app_name="Idle", is_idle=True)
+
     idle_seconds = _idle_seconds()
     if idle_seconds >= idle_threshold_seconds:
         return ActivityState(app_name="Idle", is_idle=True)
@@ -76,7 +81,11 @@ def get_activity_state(idle_threshold_seconds: int) -> ActivityState:
             path = Path(buffer.value)
             app_name, legacy_names = _application_metadata(path)
             window_title = _window_title(window)
-            if _is_lock_screen(app_name, window_title):
+            if _is_system_idle_surface(
+                app_name,
+                path.stem,
+                window_title,
+            ):
                 return ActivityState(app_name="Idle", is_idle=True)
             return ActivityState(
                 app_name=app_name,
@@ -133,10 +142,29 @@ def _detail_key(app_name: str, window: int, window_title: str) -> str:
     return f"window:{window}"
 
 
-def _is_lock_screen(app_name: str, window_title: str) -> bool:
+def _is_system_idle_surface(
+    app_name: str, process_name: str, window_title: str
+) -> bool:
+    normalized_app = app_name.strip().casefold()
+    normalized_process = process_name.strip().casefold()
+    normalized_title = window_title.strip().casefold()
     return (
-        app_name.casefold() == "windows default lock screen"
-        or window_title.casefold() == "windows default lock screen"
+        normalized_app
+        in {
+            "credential ui broker",
+            "desktop",
+            "program manager",
+            "windows default lock screen",
+            "windows logon user interface host",
+        }
+        or normalized_process in {"credentialuibroker", "lockapp", "logonui"}
+        or normalized_title in {
+            "credential ui broker",
+            "desktop",
+            "program manager",
+            "windows default lock screen",
+            "windows logon user interface host",
+        }
     )
 
 

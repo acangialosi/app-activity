@@ -9,6 +9,7 @@ from .dashboard import create_server
 from .database import ActivityDatabase
 from .paths import DATABASE_PATH, LOG_PATH, PID_PATH, PORT, STOP_PATH, ensure_data_dir
 from .tray import TrayApplication
+from .windows_activity import get_activity_state
 
 
 def run_service() -> None:
@@ -16,11 +17,19 @@ def run_service() -> None:
     STOP_PATH.unlink(missing_ok=True)
     PID_PATH.write_text(str(os.getpid()), encoding="ascii")
     stop_event = threading.Event()
+    display_off_event = threading.Event()
 
     database: ActivityDatabase | None = None
     try:
         database = ActivityDatabase(DATABASE_PATH)
-        collector = ActivityCollector(database, stop_event)
+        collector = ActivityCollector(
+            database,
+            stop_event,
+            state_provider=lambda idle_threshold: get_activity_state(
+                idle_threshold,
+                display_off_event.is_set(),
+            ),
+        )
         collector_thread = threading.Thread(
             target=collector.run, name="activity-collector", daemon=True
         )
@@ -30,7 +39,11 @@ def run_service() -> None:
             target=server.serve_forever, name="activity-dashboard", daemon=True
         )
         server_thread.start()
-        tray = TrayApplication(STOP_PATH, f"http://127.0.0.1:{PORT}")
+        tray = TrayApplication(
+            STOP_PATH,
+            f"http://127.0.0.1:{PORT}",
+            display_off_event,
+        )
         tray.run()
         stop_event.set()
         server.shutdown()

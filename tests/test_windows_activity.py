@@ -9,7 +9,8 @@ from app_activity.windows_activity import (
     _application_metadata,
     _application_name,
     _detail_key,
-    _is_lock_screen,
+    _is_system_idle_surface,
+    get_activity_state,
 )
 
 
@@ -74,20 +75,53 @@ class ApplicationNameTests(unittest.TestCase):
         self.assertTrue(uses_title_details("Microsoft Edge"))
         self.assertFalse(uses_title_details("ArcGIS Pro"))
 
-    def test_lock_screen_is_identified_from_product_name_or_title(self) -> None:
-        self.assertTrue(_is_lock_screen("Windows Default Lock Screen", ""))
+    def test_system_idle_surfaces_are_identified(self) -> None:
         self.assertTrue(
-            _is_lock_screen(
+            _is_system_idle_surface(
+                "Windows Default Lock Screen", "LockApp", ""
+            )
+        )
+        self.assertTrue(
+            _is_system_idle_surface(
                 "Microsoft Windows Operating System",
+                "LockApp",
                 "Windows Default Lock Screen",
             )
         )
-        self.assertFalse(
-            _is_lock_screen(
+        self.assertTrue(
+            _is_system_idle_surface(
+                "Windows Explorer", "explorer", "Program Manager"
+            )
+        )
+        self.assertTrue(
+            _is_system_idle_surface(
+                "Microsoft Windows Operating System", "LogonUI", ""
+            )
+        )
+        self.assertTrue(
+            _is_system_idle_surface(
                 "Microsoft Windows Operating System",
+                "CredentialUIBroker",
+                "",
+            )
+        )
+        self.assertFalse(
+            _is_system_idle_surface(
+                "Microsoft Windows Operating System",
+                "explorer",
                 "Task Switching",
             )
         )
+
+    def test_display_off_is_idle_without_querying_foreground_app(self) -> None:
+        with patch(
+            "app_activity.windows_activity._idle_seconds"
+        ) as idle_seconds:
+            state = get_activity_state(300, display_is_off=True)
+
+        self.assertEqual("Idle", state.app_name)
+        self.assertTrue(state.is_idle)
+        idle_seconds.assert_not_called()
 
 
 if __name__ == "__main__":

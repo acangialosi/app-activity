@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import threading
 import webbrowser
 from ctypes import wintypes
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 
 WM_DESTROY = 0x0002
 WM_COMMAND = 0x0111
+WM_POWERBROADCAST = 0x0218
 WM_TIMER = 0x0113
 WM_USER = 0x0400
 WM_LBUTTONUP = 0x0202
@@ -28,6 +30,8 @@ IDI_APPLICATION = 32512
 IDC_ARROW = 32512
 OPEN_REPORT = 1001
 EXIT_APP = 1002
+PBT_POWERSETTINGCHANGE = 0x8013
+DEVICE_NOTIFY_WINDOW_HANDLE = 0x00000000
 
 
 LRESULT = ctypes.c_ssize_t
@@ -106,6 +110,14 @@ class ICONINFO(ctypes.Structure):
     ]
 
 
+class POWERBROADCAST_SETTING(ctypes.Structure):
+    _fields_ = [
+        ("PowerSetting", GUID),
+        ("DataLength", wintypes.DWORD),
+        ("Data", ctypes.c_ubyte * 1),
+    ]
+
+
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 shell32 = ctypes.WinDLL("shell32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -135,6 +147,14 @@ user32.LoadCursorW.restype = wintypes.HANDLE
 user32.CreateIconIndirect.argtypes = [ctypes.POINTER(ICONINFO)]
 user32.CreateIconIndirect.restype = wintypes.HICON
 user32.DestroyIcon.argtypes = [wintypes.HICON]
+user32.RegisterPowerSettingNotification.argtypes = [
+    wintypes.HANDLE,
+    ctypes.POINTER(GUID),
+    wintypes.DWORD,
+]
+user32.RegisterPowerSettingNotification.restype = wintypes.HANDLE
+user32.UnregisterPowerSettingNotification.argtypes = [wintypes.HANDLE]
+user32.UnregisterPowerSettingNotification.restype = wintypes.BOOL
 user32.GetDC.argtypes = [wintypes.HWND]
 user32.GetDC.restype = wintypes.HDC
 user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
@@ -172,13 +192,36 @@ gdi32.SelectObject.restype = wintypes.HGDIOBJ
 gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
 gdi32.DeleteDC.argtypes = [wintypes.HDC]
 
+CONSOLE_DISPLAY_STATE = GUID(
+    0x6FE69556,
+    0x704A,
+    0x47A0,
+    (ctypes.c_ubyte * 8)(
+        0x8F,
+        0x24,
+        0xC2,
+        0x8D,
+        0x93,
+        0x6F,
+        0xDA,
+        0x47,
+    ),
+)
+
 
 class TrayApplication:
-    def __init__(self, stop_path: Path, dashboard_url: str) -> None:
+    def __init__(
+        self,
+        stop_path: Path,
+        dashboard_url: str,
+        display_off_event: threading.Event | None = None,
+    ) -> None:
         self.stop_path = stop_path
         self.dashboard_url = dashboard_url
+        self.display_off_event = display_off_event or threading.Event()
         self.hwnd: int | None = None
         self.icon: int | None = None
+        self._power_notification: int | None = None
         self._notify_data: NOTIFYICONDATAW | None = None
         self._window_proc = WNDPROC(self._handle_message)
 
@@ -210,6 +253,14 @@ class TrayApplication:
             None,
         )
         if not self.hwnd:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        self._power_notification = user32.RegisterPowerSettingNotification(
+            self.hwnd,
+            ctypes.byref(CONSOLE_DISPLAY_STATE),
+            DEVICE_NOTIFY_WINDOW_HANDLE,
+        )
+        if not self._power_notification:
             raise ctypes.WinError(ctypes.get_last_error())
 
         self.icon = _create_activity_icon()
@@ -253,11 +304,32 @@ class TrayApplication:
             if self.stop_path.exists():
                 user32.DestroyWindow(hwnd)
             return 0
+        if message == WM_POWERBROADCAST and wparam == PBT_POWERSETTINGCHANGE:
+            self._update_display_state(lparam)
+            return 1
         if message == WM_DESTROY:
+            self._remove_power_notification()
             self._remove_icon()
             user32.PostQuitMessage(0)
             return 0
         return user32.DefWindowProcW(hwnd, message, wparam, lparam)
+
+    def _update_display_state(self, lparam: int) -> None:
+        setting = ctypes.cast(
+            lparam, ctypes.POINTER(POWERBROADCAST_SETTING)
+        ).contents
+        if setting.DataLength < ctypes.sizeof(wintypes.DWORD):
+            return
+        data_address = (
+            lparam + POWERBROADCAST_SETTING.Data.offset
+        )
+        display_state = ctypes.cast(
+            data_address, ctypes.POINTER(wintypes.DWORD)
+        ).contents.value
+        if display_state == 0:
+            self.display_off_event.set()
+        elif display_state in (1, 2):
+            self.display_off_event.clear()
 
     def open_report(self) -> None:
         webbrowser.open(self.dashboard_url)
@@ -292,6 +364,13 @@ class TrayApplication:
         if self.icon:
             user32.DestroyIcon(self.icon)
             self.icon = None
+
+    def _remove_power_notification(self) -> None:
+        if self._power_notification:
+            user32.UnregisterPowerSettingNotification(
+                self._power_notification
+            )
+            self._power_notification = None
 
 
 def _create_activity_icon() -> int:
