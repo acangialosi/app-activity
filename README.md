@@ -20,8 +20,9 @@ hour, day, week, month, and year views in a local browser dashboard.
 - The activity chart uses consistent per-application colors and can switch
   between absolute time and percentage-of-bucket views.
 - Previous and next controls navigate by the selected hour, day, week, month,
-  or year period without mixing data between reporting windows. The hour view
-  uses five-minute timeline buckets.
+  or year period without mixing data between reporting windows. **Now** returns
+  any selected view to its current period. The hour view uses five-minute
+  timeline buckets.
 - The collector samples every five seconds and uses Windows APIs plus SQLite.
 - You are considered idle after five minutes without keyboard or mouse input.
 - The Windows lock screen, sign-in and credential surfaces, Windows desktop,
