@@ -9,6 +9,7 @@ from app_activity.windows_activity import (
     _application_metadata,
     _application_name,
     _detail_key,
+    _is_lock_screen,
 )
 
 
@@ -72,6 +73,21 @@ class ApplicationNameTests(unittest.TestCase):
     ) -> None:
         self.assertTrue(uses_title_details("Microsoft Edge"))
         self.assertFalse(uses_title_details("ArcGIS Pro"))
+
+    def test_lock_screen_is_identified_from_product_name_or_title(self) -> None:
+        self.assertTrue(_is_lock_screen("Windows Default Lock Screen", ""))
+        self.assertTrue(
+            _is_lock_screen(
+                "Microsoft Windows Operating System",
+                "Windows Default Lock Screen",
+            )
+        )
+        self.assertFalse(
+            _is_lock_screen(
+                "Microsoft Windows Operating System",
+                "Task Switching",
+            )
+        )
 
 
 if __name__ == "__main__":

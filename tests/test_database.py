@@ -110,6 +110,37 @@ class ActivityDatabaseTests(unittest.TestCase):
         self.assertIn("window_title", columns)
         self.assertIn("detail_key", columns)
 
+    def test_migrates_existing_lock_screen_segments_to_idle(self) -> None:
+        connection = self.database._connection()
+        connection.execute(
+            """
+            INSERT INTO activity_segments(
+                start_ts, end_ts, app_name, is_idle, window_title, detail_key
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                100,
+                130,
+                "Microsoft Windows Operating System",
+                0,
+                "Windows Default Lock Screen",
+                "window:100",
+            ),
+        )
+        connection.commit()
+        self.database.close()
+
+        self.database = ActivityDatabase(self.database.path)
+
+        row = self.database._connection().execute(
+            """
+            SELECT app_name, is_idle, window_title, detail_key
+            FROM activity_segments
+            """
+        ).fetchone()
+        self.assertEqual(("Idle", 1, "", ""), row)
+
     def test_report_groups_multiple_titles_under_one_app(self) -> None:
         now = datetime.now().astimezone().replace(
             hour=12, minute=0, second=0, microsecond=0

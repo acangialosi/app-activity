@@ -23,6 +23,8 @@ day, week, month, and year views in a local browser dashboard.
   period without mixing data between reporting windows.
 - The collector samples every five seconds and uses Windows APIs plus SQLite.
 - You are considered idle after five minutes without keyboard or mouse input.
+- The Windows lock screen is classified as idle immediately and is not included
+  in application usage.
 - A dedicated chart icon in the Windows system tray shows when tracking is
   running. Click it to open the usage report; right-click it to open or exit.
 

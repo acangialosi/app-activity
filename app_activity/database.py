@@ -82,6 +82,17 @@ class ActivityDatabase:
                     ADD COLUMN detail_key TEXT NOT NULL DEFAULT ''
                     """
                 )
+            connection.execute(
+                """
+                UPDATE activity_segments
+                SET app_name = 'Idle',
+                    is_idle = 1,
+                    window_title = '',
+                    detail_key = ''
+                WHERE lower(app_name) = 'windows default lock screen'
+                   OR lower(window_title) = 'windows default lock screen'
+                """
+            )
             connection.commit()
         finally:
             connection.close()

@@ -76,6 +76,8 @@ def get_activity_state(idle_threshold_seconds: int) -> ActivityState:
             path = Path(buffer.value)
             app_name, legacy_names = _application_metadata(path)
             window_title = _window_title(window)
+            if _is_lock_screen(app_name, window_title):
+                return ActivityState(app_name="Idle", is_idle=True)
             return ActivityState(
                 app_name=app_name,
                 is_idle=False,
@@ -129,6 +131,13 @@ def _detail_key(app_name: str, window: int, window_title: str) -> str:
     if uses_title_details(app_name) and window_title:
         return f"tab:{window}:{window_title}"
     return f"window:{window}"
+
+
+def _is_lock_screen(app_name: str, window_title: str) -> bool:
+    return (
+        app_name.casefold() == "windows default lock screen"
+        or window_title.casefold() == "windows default lock screen"
+    )
 
 
 def _version_string(path: Path, field: str) -> str | None:
