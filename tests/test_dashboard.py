@@ -16,6 +16,18 @@ class DashboardTests(unittest.TestCase):
             HTML,
         )
 
+    def test_chart_has_mode_aware_y_axis(self) -> None:
+        self.assertIn('class="y-axis" id="yAxis"', HTML)
+        self.assertIn("function timeAxis(dataMax,capacity)", HTML)
+        self.assertIn("max<=capacity", HTML)
+        self.assertIn("x.seconds/axis.max*100", HTML)
+        self.assertIn('"--grid-step"', HTML)
+
+    def test_truncated_application_names_receive_tooltips(self) -> None:
+        self.assertIn('class="app-name" data-app-index="${i}"', HTML)
+        self.assertIn("label.scrollWidth>label.clientWidth?app.name", HTML)
+        self.assertIn('addEventListener("resize",updateAppTooltips)', HTML)
+
 
 if __name__ == "__main__":
     unittest.main()

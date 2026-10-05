@@ -6,6 +6,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -45,3 +48,19 @@ jobs:
           name: AppActivity-Windows-Installer
           path: artifacts/AppActivity-Setup.exe
           if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $installer = "artifacts\AppActivity-Setup.exe"
+          if (gh release view $env:GITHUB_REF_NAME 2>$null) {
+            gh release upload $env:GITHUB_REF_NAME $installer --clobber
+          } else {
+            gh release create $env:GITHUB_REF_NAME $installer `
+              --verify-tag `
+              --generate-notes `
+              --title $env:GITHUB_REF_NAME
+          }

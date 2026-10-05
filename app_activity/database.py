@@ -95,10 +95,29 @@ class ActivityDatabase:
                    OR lower(window_title) = 'program manager'
                    OR lower(app_name) = 'desktop'
                    OR lower(window_title) = 'desktop'
+                   OR lower(app_name) = 'task switching'
+                   OR lower(window_title) = 'task switching'
                    OR lower(app_name) = 'windows logon user interface host'
                    OR lower(window_title) = 'windows logon user interface host'
                    OR lower(app_name) = 'credential ui broker'
                    OR lower(window_title) = 'credential ui broker'
+                """
+            )
+            connection.execute(
+                """
+                UPDATE activity_segments
+                SET app_name = CASE
+                    WHEN instr(window_title, char(92)) > 0
+                    THEN substr(
+                        window_title,
+                        1,
+                        instr(window_title, char(92)) - 1
+                    )
+                    ELSE window_title
+                END
+                WHERE window_title != ''
+                  AND lower(app_name)
+                      LIKE 'microsoft%windows%operating system'
                 """
             )
             connection.commit()
@@ -290,6 +309,11 @@ class ActivityDatabase:
             "timeline": [
                 {
                     "label": bucket["label"],
+                    "capacity_seconds": round(
+                        (
+                            bucket["end"] - bucket["start"]
+                        ).total_seconds()
+                    ),
                     "seconds": round(seconds),
                     "apps": [
                         {"name": name, "seconds": round(app_seconds)}

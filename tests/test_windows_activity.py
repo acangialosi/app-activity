@@ -51,6 +51,33 @@ class ApplicationNameTests(unittest.TestCase):
         self.assertEqual("Windows Terminal", name)
         self.assertEqual(("Windows Terminal Host",), aliases)
 
+    def test_uses_description_for_generic_windows_product_names(self) -> None:
+        for executable, description in (
+            ("CalculatorApp.exe", "Calculator"),
+            ("Taskmgr.exe", "Task Manager"),
+        ):
+            with self.subTest(executable=executable), patch(
+                "app_activity.windows_activity._version_string",
+                side_effect=[
+                    "Microsoft® Windows® Operating System",
+                    description,
+                ],
+            ):
+                name, aliases = _application_metadata(Path(executable))
+
+            self.assertEqual(description, name)
+            self.assertEqual((), aliases)
+
+    def test_uses_process_name_when_all_metadata_is_generic(self) -> None:
+        with patch(
+            "app_activity.windows_activity._version_string",
+            return_value="Microsoft® Windows® Operating System",
+        ):
+            name, aliases = _application_metadata(Path("SystemTool.exe"))
+
+        self.assertEqual("SystemTool", name)
+        self.assertEqual((), aliases)
+
     def test_falls_back_to_process_name_without_metadata(self) -> None:
         with patch(
             "app_activity.windows_activity._version_string", return_value=None
@@ -105,7 +132,7 @@ class ApplicationNameTests(unittest.TestCase):
                 "",
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             _is_system_idle_surface(
                 "Microsoft Windows Operating System",
                 "explorer",

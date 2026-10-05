@@ -141,7 +141,83 @@ class ActivityDatabaseTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(("Idle", 1, "", ""), row)
 
-    def test_migrates_existing_desktop_and_sign_in_segments_to_idle(
+    def test_migrates_generic_windows_segments_from_window_titles(self) -> None:
+        connection = self.database._connection()
+        connection.executemany(
+            """
+            INSERT INTO activity_segments(
+                start_ts, end_ts, app_name, is_idle, window_title, detail_key
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    100,
+                    130,
+                    "Microsoft® Windows® Operating System",
+                    0,
+                    "Calculator",
+                    "window:100",
+                ),
+                (
+                    130,
+                    160,
+                    "Microsoft® Windows® Operating System",
+                    0,
+                    "Task Manager",
+                    "window:200",
+                ),
+                (
+                    160,
+                    190,
+                    "Microsoft® Windows® Operating System",
+                    0,
+                    "Control Panel\\Programs\\Programs and Features",
+                    "window:300",
+                ),
+                (
+                    190,
+                    220,
+                    "Microsoft® Windows® Operating System",
+                    0,
+                    "",
+                    "window:400",
+                ),
+            ],
+        )
+        connection.commit()
+        self.database.close()
+
+        self.database = ActivityDatabase(self.database.path)
+
+        row = self.database._connection().execute(
+            """
+            SELECT app_name, is_idle, window_title, detail_key
+            FROM activity_segments
+            ORDER BY start_ts
+            """
+        ).fetchall()
+        self.assertEqual(
+            [
+                ("Calculator", 0, "Calculator", "window:100"),
+                ("Task Manager", 0, "Task Manager", "window:200"),
+                (
+                    "Control Panel",
+                    0,
+                    "Control Panel\\Programs\\Programs and Features",
+                    "window:300",
+                ),
+                (
+                    "Microsoft® Windows® Operating System",
+                    0,
+                    "",
+                    "window:400",
+                ),
+            ],
+            row,
+        )
+
+    def test_migrates_existing_system_surfaces_to_idle(
         self,
     ) -> None:
         connection = self.database._connection()
@@ -177,6 +253,14 @@ class ActivityDatabaseTests(unittest.TestCase):
                     "",
                     "window:300",
                 ),
+                (
+                    190,
+                    220,
+                    "Microsoft Windows Operating System",
+                    0,
+                    "Task Switching",
+                    "window:400",
+                ),
             ],
         )
         connection.commit()
@@ -191,7 +275,7 @@ class ActivityDatabaseTests(unittest.TestCase):
             ORDER BY start_ts
             """
         ).fetchall()
-        self.assertEqual([("Idle", 1, "", "")] * 3, rows)
+        self.assertEqual([("Idle", 1, "", "")] * 4, rows)
 
     def test_report_groups_multiple_titles_under_one_app(self) -> None:
         now = datetime.now().astimezone().replace(
@@ -264,6 +348,10 @@ class ActivityDatabaseTests(unittest.TestCase):
 
         self.assertEqual(600, report["active_seconds"])
         self.assertEqual(12, len(report["timeline"]))
+        self.assertEqual(
+            [300] * 12,
+            [bucket["capacity_seconds"] for bucket in report["timeline"]],
+        )
         self.assertEqual(
             ["12:00", "12:05", "12:10"],
             [bucket["label"] for bucket in report["timeline"][:3]],

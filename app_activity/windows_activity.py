@@ -118,13 +118,32 @@ def _application_name(path: Path) -> str:
 def _application_metadata(path: Path) -> tuple[str, tuple[str, ...]]:
     product_name = _version_string(path, "ProductName")
     description = _version_string(path, "FileDescription")
-    display_name = product_name or description or path.stem or "Unknown"
+    useful_product_name = (
+        None if _is_generic_windows_product(product_name) else product_name
+    )
+    useful_description = (
+        None if _is_generic_windows_product(description) else description
+    )
+    display_name = (
+        useful_product_name or useful_description or path.stem or "Unknown"
+    )
     legacy_names = tuple(
         name
-        for name in (description,)
+        for name in (useful_description,)
         if name and name != display_name
     )
     return display_name, legacy_names
+
+
+def _is_generic_windows_product(name: str | None) -> bool:
+    if not name:
+        return False
+    normalized = " ".join(
+        "".join(character if character.isalnum() else " " for character in name)
+        .casefold()
+        .split()
+    )
+    return normalized == "microsoft windows operating system"
 
 
 def _window_title(window: int) -> str:
@@ -154,6 +173,7 @@ def _is_system_idle_surface(
             "credential ui broker",
             "desktop",
             "program manager",
+            "task switching",
             "windows default lock screen",
             "windows logon user interface host",
         }
@@ -162,6 +182,7 @@ def _is_system_idle_surface(
             "credential ui broker",
             "desktop",
             "program manager",
+            "task switching",
             "windows default lock screen",
             "windows logon user interface host",
         }

@@ -64,6 +64,9 @@ Release builds provide `AppActivity-Setup.exe`, a per-user installer that
 includes the Python runtime and requires no separate Python installation. It
 installs under `%LOCALAPPDATA%\Programs\AppActivity`, registers sign-in startup,
 adds Start Menu shortcuts, and preserves activity history during uninstall.
+Pushing a `v*` tag builds the installer in GitHub Actions and attaches it to a
+GitHub Release. Manual workflow runs produce a downloadable Actions artifact
+without creating a release.
 
 To build the installer:
 
