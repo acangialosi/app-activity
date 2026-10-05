@@ -1,6 +1,7 @@
 # App Activity
 
 [![Windows installer](https://github.com/acangialosi/app-activity/actions/workflows/windows-installer.yml/badge.svg?branch=main)](https://github.com/acangialosi/app-activity/actions/workflows/windows-installer.yml)
+[![Tests](https://img.shields.io/github/actions/workflow/status/acangialosi/app-activity/windows-installer.yml?branch=main&label=tests&logo=github)](https://github.com/acangialosi/app-activity/actions/workflows/windows-installer.yml)
 [![Download latest installer](https://img.shields.io/badge/download-latest%20installer-2ea44f?logo=windows)](https://github.com/acangialosi/app-activity/releases/download/nightly/AppActivity-Setup.exe)
 
 A lightweight, local-only Windows activity tracker. It records which application
@@ -79,7 +80,8 @@ adds Start Menu shortcuts, and preserves activity history during uninstall.
 Every push to `main` replaces the installer in the rolling `nightly` prerelease.
 Pushing a `v*` tag creates a permanent versioned GitHub Release. Manual workflow
 runs produce a downloadable Actions artifact retained for one day without
-creating a release.
+creating a release. Every push and pull request must pass the test suite before
+the installer is built, and publishing occurs only after both jobs succeed.
 
 To build the installer:
 
