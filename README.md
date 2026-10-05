@@ -2,7 +2,7 @@
 
 [![Download latest installer](https://img.shields.io/badge/download-latest%20installer-2ea44f?logo=windows)](https://github.com/acangialosi/app-activity/releases/download/nightly/AppActivity-Setup.exe)
 [![Windows installer](https://github.com/acangialosi/app-activity/actions/workflows/windows-installer.yml/badge.svg?branch=main)](https://github.com/acangialosi/app-activity/actions/workflows/windows-installer.yml)
-[![Tests](https://github.com/acangialosi/app-activity/actions/workflows/windows-installer.yml/badge.svg?branch=main&event=push)](https://github.com/acangialosi/app-activity/actions/workflows/windows-installer.yml)
+[![Tests](https://github.com/acangialosi/app-activity/actions/workflows/test-status.yml/badge.svg?branch=main)](https://github.com/acangialosi/app-activity/actions/workflows/test-status.yml)
 
 A lightweight, local-only Windows activity tracker. It records which application
 has the foreground window, separates active time from idle time, and provides

@@ -1,0 +1,30 @@
+name: Tests
+
+on:
+  workflow_run:
+    workflows:
+      - Windows installer
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  test-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify test job passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          conclusion="$(
+            gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs" \
+              --jq '.jobs[] | select(.name == "test") | .conclusion'
+          )"
+          if [ "$conclusion" != "success" ]; then
+            echo "Test job conclusion: ${conclusion:-not found}"
+            exit 1
+          fi
