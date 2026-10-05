@@ -23,6 +23,8 @@ hour, day, week, month, and year views in a local browser dashboard.
   Browsers group by window and active page title so tab usage remains distinct.
 - The activity chart uses consistent per-application colors and can switch
   between absolute time and percentage-of-bucket views.
+- The dashboard supports light and dark themes or can follow the Windows theme.
+  The selected preference is saved in the browser.
 - Previous and next controls navigate by the selected hour, day, week, month,
   or year period without mixing data between reporting windows. **Now** returns
   any selected view to its current period. The hour view uses five-minute

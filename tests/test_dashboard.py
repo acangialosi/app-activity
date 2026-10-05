@@ -30,6 +30,16 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("label.scrollWidth>label.clientWidth?app.name", HTML)
         self.assertIn('addEventListener("resize",updateAppTooltips)', HTML)
 
+    def test_theme_can_follow_system_or_use_light_and_dark_modes(self) -> None:
+        self.assertIn('id="themeSelect"', HTML)
+        self.assertIn('<option value="system">System</option>', HTML)
+        self.assertIn('<option value="light">Light</option>', HTML)
+        self.assertIn('<option value="dark">Dark</option>', HTML)
+        self.assertIn("@media(prefers-color-scheme:dark)", HTML)
+        self.assertIn('localStorage.getItem("appActivityTheme")', HTML)
+        self.assertIn('localStorage.setItem("appActivityTheme",theme)', HTML)
+        self.assertIn("delete document.documentElement.dataset.theme", HTML)
+
 
 if __name__ == "__main__":
     unittest.main()
