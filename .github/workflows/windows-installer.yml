@@ -90,7 +90,10 @@ jobs:
           git tag --force $release $env:GITHUB_SHA
           git push origin "refs/tags/$release" --force
 
-          if (gh release view $release 2>$null) {
+          $releases = @(
+            gh release list --limit 100 --json tagName | ConvertFrom-Json
+          )
+          if ($releases.tagName -contains $release) {
             gh release upload $release $installer --clobber
             gh release edit $release `
               --prerelease `

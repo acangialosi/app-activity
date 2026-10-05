@@ -1,5 +1,8 @@
 # App Activity
 
+[![Windows installer](https://github.com/acangialosi/app-activity/actions/workflows/windows-installer.yml/badge.svg?branch=main)](https://github.com/acangialosi/app-activity/actions/workflows/windows-installer.yml)
+[![Download latest installer](https://img.shields.io/badge/download-latest%20installer-2ea44f?logo=windows)](https://github.com/acangialosi/app-activity/releases/download/nightly/AppActivity-Setup.exe)
+
 A lightweight, local-only Windows activity tracker. It records which application
 has the foreground window, separates active time from idle time, and provides
 hour, day, week, month, and year views in a local browser dashboard.
@@ -33,7 +36,16 @@ hour, day, week, month, and year views in a local browser dashboard.
 
 ## Install
 
-Python 3.11 or newer is required. From this folder, run:
+### Windows installer
+
+**[Download the latest App Activity installer](https://github.com/acangialosi/app-activity/releases/download/nightly/AppActivity-Setup.exe)**
+
+The installer includes the Python runtime, installs for the current user, and
+starts App Activity automatically at sign-in.
+
+### Run from source
+
+Python 3.11 or newer is required. From the repository folder, run:
 
 ```powershell
 .\app_activity.cmd install
