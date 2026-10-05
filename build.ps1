@@ -1,27 +1,17 @@
 [CmdletBinding()]
 param(
-    [switch]$SkipDependencyInstall
+    [switch]$SkipDependencyInstall,
+    [switch]$SkipApplicationBuild,
+    [switch]$SkipInstallerBuild,
+    [switch]$SkipCodeSigning
 )
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 Set-Location $root
 
-if (-not $SkipDependencyInstall) {
-    python -m pip install --requirement "$root\requirements-build.txt"
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to install build dependencies."
-    }
-}
-
-python "$root\tools\generate_icon.py"
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to generate the application icon."
-}
-
-python -m PyInstaller --noconfirm --clean "$root\AppActivity.spec"
-if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller failed."
+if ($SkipApplicationBuild -and $SkipInstallerBuild) {
+    throw "Application and installer builds cannot both be skipped."
 }
 
 function Get-SignTool {
@@ -58,7 +48,38 @@ function Invoke-CodeSigning([string]$Path) {
     }
 }
 
-Invoke-CodeSigning "$root\dist\AppActivity\AppActivity.exe"
+if (-not $SkipApplicationBuild) {
+    if (-not $SkipDependencyInstall) {
+        python -m pip install --requirement "$root\requirements-build.txt"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install build dependencies."
+        }
+    }
+
+    python "$root\tools\generate_icon.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to generate the application icon."
+    }
+
+    python -m PyInstaller --noconfirm --clean "$root\AppActivity.spec"
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller failed."
+    }
+
+    if (-not $SkipCodeSigning) {
+        Invoke-CodeSigning "$root\dist\AppActivity\AppActivity.exe"
+    }
+}
+
+$application = "$root\dist\AppActivity\AppActivity.exe"
+if (-not (Test-Path $application)) {
+    throw "Application executable was not found at $application."
+}
+
+if ($SkipInstallerBuild) {
+    Write-Output "Built $application"
+    return
+}
 
 $innoCandidates = @(
     "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
@@ -82,5 +103,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $installer = "$root\artifacts\AppActivity-Setup.exe"
-Invoke-CodeSigning $installer
+if (-not $SkipCodeSigning) {
+    Invoke-CodeSigning $installer
+}
 Write-Output "Built $installer"

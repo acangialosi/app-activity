@@ -30,7 +30,15 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+      id-token: write
     env:
+      ARTIFACT_SIGNING_ENABLED: ${{ vars.ARTIFACT_SIGNING_ENABLED }}
+      ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+      ARTIFACT_SIGNING_ACCOUNT_NAME: ${{ vars.ARTIFACT_SIGNING_ACCOUNT_NAME }}
+      ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
     steps:
@@ -45,7 +53,7 @@ jobs:
         run: choco install innosetup --no-progress --yes
 
       - name: Prepare signing certificate
-        if: env.WINDOWS_CERTIFICATE_BASE64 != ''
+        if: env.ARTIFACT_SIGNING_ENABLED != 'true' && env.WINDOWS_CERTIFICATE_BASE64 != ''
         shell: powershell
         env:
           CERTIFICATE_BASE64: ${{ env.WINDOWS_CERTIFICATE_BASE64 }}
@@ -60,8 +68,71 @@ jobs:
           "SIGNING_CERTIFICATE_PASSWORD=$env:CERTIFICATE_PASSWORD" >> $env:GITHUB_ENV
 
       - name: Build installer
+        if: env.ARTIFACT_SIGNING_ENABLED != 'true'
         shell: powershell
         run: .\build.ps1
+
+      - name: Build application for Artifact Signing
+        if: env.ARTIFACT_SIGNING_ENABLED == 'true' && github.event_name != 'pull_request'
+        shell: powershell
+        run: .\build.ps1 -SkipInstallerBuild -SkipCodeSigning
+
+      - name: Log in to Azure
+        if: env.ARTIFACT_SIGNING_ENABLED == 'true' && github.event_name != 'pull_request'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign application with Artifact Signing
+        if: env.ARTIFACT_SIGNING_ENABLED == 'true' && github.event_name != 'pull_request'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ env.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ env.ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ env.ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files: ${{ github.workspace }}\dist\AppActivity\AppActivity.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Package signed application
+        if: env.ARTIFACT_SIGNING_ENABLED == 'true' && github.event_name != 'pull_request'
+        shell: powershell
+        run: .\build.ps1 -SkipDependencyInstall -SkipApplicationBuild -SkipCodeSigning
+
+      - name: Sign installer with Artifact Signing
+        if: env.ARTIFACT_SIGNING_ENABLED == 'true' && github.event_name != 'pull_request'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ env.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ env.ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ env.ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files: ${{ github.workspace }}\artifacts\AppActivity-Setup.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify Artifact Signing signatures
+        if: env.ARTIFACT_SIGNING_ENABLED == 'true' && github.event_name != 'pull_request'
+        shell: powershell
+        run: |
+          @(
+            "dist\AppActivity\AppActivity.exe",
+            "artifacts\AppActivity-Setup.exe"
+          ) | ForEach-Object {
+            $signature = Get-AuthenticodeSignature $_
+            if ($signature.Status -ne "Valid") {
+              throw "$_ has invalid signature status: $($signature.Status)"
+            }
+            Write-Output "$_ signed by $($signature.SignerCertificate.Subject)"
+          }
+
+      - name: Build unsigned pull request installer
+        if: env.ARTIFACT_SIGNING_ENABLED == 'true' && github.event_name == 'pull_request'
+        shell: powershell
+        run: .\build.ps1 -SkipCodeSigning
 
       - name: Upload installer
         if: github.event_name == 'workflow_dispatch'
