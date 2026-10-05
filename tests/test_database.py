@@ -51,6 +51,10 @@ class ActivityDatabaseTests(unittest.TestCase):
             "project.py - Code", report["apps"][0]["windows"][0]["title"]
         )
         self.assertEqual(1800, report["apps"][0]["windows"][0]["seconds"])
+        self.assertEqual(
+            [3600] * 24,
+            [bucket["capacity_seconds"] for bucket in report["timeline"]],
+        )
         timeline_app_seconds = sum(
             app["seconds"]
             for bucket in report["timeline"]

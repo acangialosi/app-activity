@@ -22,6 +22,8 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("max<=capacity", HTML)
         self.assertIn("x.seconds/axis.max*100", HTML)
         self.assertIn('"--grid-step"', HTML)
+        self.assertIn("function fixedTimeAxis(capacity,intervals)", HTML)
+        self.assertIn('d.period==="hour"?5:d.period==="day"?4:0', HTML)
 
     def test_truncated_application_names_receive_tooltips(self) -> None:
         self.assertIn('class="app-name" data-app-index="${i}"', HTML)
