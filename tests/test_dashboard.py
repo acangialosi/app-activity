@@ -1,11 +1,31 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 import unittest
+from pathlib import Path
 
 from app_activity.dashboard import HTML
 
 
 class DashboardTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required for JavaScript tests")
+    def test_application_filter_behavior(self) -> None:
+        result = subprocess.run(
+            ["node", str(Path(__file__).with_name("dashboard_filter_test.js"))],
+            input=HTML,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_chart_has_labeled_application_filter(self) -> None:
+        self.assertIn('for="applicationSelect"', HTML)
+        self.assertIn('id="applicationSelect" aria-describedby="chartHelp"', HTML)
+        self.assertIn('<option value="">All applications</option>', HTML)
+
     def test_current_period_button_resets_offset(self) -> None:
         self.assertIn('id="currentPeriod"', HTML)
         self.assertIn(">Now</button>", HTML)
