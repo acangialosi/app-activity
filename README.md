@@ -121,8 +121,8 @@ python tools\security_check.py check
 python tools\security_check.py install-hook
 ```
 
-The local hook scans outgoing Git history for secrets and audits committed
-build/security dependencies, including transitive packages. GitHub runs the
-same checks independently. Findings, missing tools, and incomplete scans block
-the push. See [Security checks](docs/security-checks.md) for scope, prerequisites,
+The local hook uses Betterleaks to scan outgoing Git history for secrets and
+pip-audit to audit committed build/security dependencies, including transitive
+packages. GitHub runs the same checks independently. Findings, missing tools,
+and incomplete scans block the push. See [Security checks](docs/security-checks.md) for scope, prerequisites,
 existing-hook handling, failure remediation, and limitations.

@@ -20,11 +20,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / ".security-tools"
-GITLEAKS_VERSION = "8.30.1"
+BETTERLEAKS_VERSION = "1.9.0"
 PIP_AUDIT_VERSION = "2.10.1"
-GITLEAKS_HASHES = {
-    "arm64": "b95f5e4f5c425cedca7ee203d9afd29597e692c4924a12ed42f970537c72cc0f",
-    "x64": "d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e",
+BETTERLEAKS_HASHES = {
+    "arm64": "3e5b9b6cdbfe8d486ae2dd2fa137473dc9ab42bf50317f051b73561121861816",
+    "x64": "b765daec9fda475b031b5a5159798cbe4294a3f2a50683cbc0471226e376d3da",
+}
+MINGIT_VERSION = "2.56.0.windows.2"
+MINGIT_HASHES = {
+    "arm64": "38b33dc6024026e3315cf88ab2cfea65205bbd7bb3a8e824bd21c8ad4fe609a7",
+    "x64": "da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be",
 }
 HOOK_MARKER = "# App Activity security pre-push hook"
 PIN = re.compile(
@@ -75,7 +80,7 @@ def repository() -> Path:
 def clean_environment() -> dict[str, str]:
     environment = {
         key: value for key, value in os.environ.items()
-        if not key.upper().startswith(("PIP_", "GITLEAKS_", "PYTHON"))
+        if not key.upper().startswith(("PIP_", "BETTERLEAKS_", "GITLEAKS_", "PYTHON"))
     }
     environment.update({
         "PIP_CONFIG_FILE": os.devnull,
@@ -84,7 +89,68 @@ def clean_environment() -> dict[str, str]:
         "PIP_NO_INPUT": "1",
         "PIP_DISABLE_PIP_VERSION_CHECK": "1",
     })
+    if local_git().exists():
+        environment["PATH"] = str(local_git().parent) + os.pathsep + environment.get("PATH", "")
     return environment
+
+
+def local_git() -> Path:
+    return TOOLS / f"git-{MINGIT_VERSION}" / "cmd" / "git.exe"
+
+
+def git_supports_isolation(environment: dict[str, str], executable: Path | None = None) -> bool:
+    environment = {
+        **environment, "GIT_CONFIG_GLOBAL": "NUL", "GIT_CONFIG_SYSTEM": "NUL",
+        "GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1",
+    }
+    command = str(executable or (local_git() if local_git().exists() else "git"))
+    result = run(
+        [command, "rev-parse", "--is-inside-work-tree"], cwd=ROOT,
+        env=environment, timeout=30,
+    )
+    return result.returncode == 0 and not result.stderr.strip()
+
+
+def download_release(url: str, digest: str, tool: str) -> bytes:
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response:
+            archive = response.read()
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise SecurityError(f"{tool} download failed; check network access to GitHub.") from error
+    if hashlib.sha256(archive).hexdigest() != digest:
+        raise SecurityError(f"{tool} download checksum mismatch; refusing to install.")
+    return archive
+
+
+def setup_git(architecture: str) -> None:
+    environment = clean_environment()
+    if local_git().exists():
+        check_version([str(local_git()), "--version"], MINGIT_VERSION)
+    if git_supports_isolation(environment):
+        return
+    destination = local_git().parent.parent
+    if destination.exists():
+        raise SecurityError("Repository-local Git is incomplete or incompatible; repair its installation.")
+    version = MINGIT_VERSION.replace(".windows.", ".")
+    suffix = {"arm64": "arm64", "x64": "64-bit"}[architecture]
+    url = (
+        f"https://github.com/git-for-windows/git/releases/download/v{MINGIT_VERSION}/"
+        f"MinGit-{version}-{suffix}.zip"
+    )
+    archive = download_release(url, MINGIT_HASHES[architecture], "MinGit")
+    with tempfile.TemporaryDirectory(prefix="mingit-setup-", dir=TOOLS) as directory:
+        staging = Path(directory) / "git"
+        with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+            if any(Path(name).is_absolute() or ".." in Path(name).parts for name in zipped.namelist()):
+                raise SecurityError("MinGit archive contains an unsafe path; refusing to install.")
+            zipped.extractall(staging)
+        executable = staging / "cmd" / "git.exe"
+        check_version([str(executable), "--version"], MINGIT_VERSION)
+        environment["PATH"] = str(executable.parent) + os.pathsep + environment.get("PATH", "")
+        if not git_supports_isolation(environment, executable):
+            raise SecurityError("Downloaded MinGit failed its isolation compatibility check.")
+        staging.rename(destination)
+    print(f"Installed repository-local Git {MINGIT_VERSION}; system Git and settings are unchanged.")
 
 
 def audit_python() -> Path:
@@ -125,20 +191,20 @@ def setup() -> None:
     if architecture is None:
         raise SecurityError("Unsupported Windows architecture; no scan was run.")
     TOOLS.mkdir(exist_ok=True)
-    executable = TOOLS / "gitleaks.exe"
-    if not executable.exists():
-        asset = f"gitleaks_{GITLEAKS_VERSION}_windows_{architecture}.zip"
-        url = f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/{asset}"
-        try:
-            with urllib.request.urlopen(url, timeout=60) as response:
-                archive = response.read()
-        except (urllib.error.URLError, TimeoutError) as error:
-            raise SecurityError("Gitleaks download failed; check network access to GitHub.") from error
-        if hashlib.sha256(archive).hexdigest() != GITLEAKS_HASHES[architecture]:
-            raise SecurityError("Gitleaks download checksum mismatch; refusing to install.")
+    executable = TOOLS / "betterleaks.exe"
+    asset = f"betterleaks_{BETTERLEAKS_VERSION}_windows_{architecture}.zip"
+    url = f"https://github.com/betterleaks/betterleaks/releases/download/v{BETTERLEAKS_VERSION}/{asset}"
+    archive = download_release(url, BETTERLEAKS_HASHES[architecture], "Betterleaks")
+    with tempfile.TemporaryDirectory(prefix="betterleaks-setup-", dir=TOOLS) as directory:
+        replacement = Path(directory) / "betterleaks.exe"
         with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
-            executable.write_bytes(zipped.read("gitleaks.exe"))
-    check_version([str(executable), "version"], GITLEAKS_VERSION)
+            try:
+                replacement.write_bytes(zipped.read("betterleaks.exe"))
+            except KeyError as error:
+                raise SecurityError("Betterleaks release archive is missing its executable.") from error
+        check_version([str(replacement), "version"], BETTERLEAKS_VERSION)
+        replacement.replace(executable)
+    setup_git(architecture)
     if not audit_python().exists():
         venv.EnvBuilder(with_pip=True).create(TOOLS / "venv")
     verify_audit_interpreter()
@@ -159,7 +225,7 @@ def setup() -> None:
             "wheel availability for this Python/Windows version; no global packages were changed."
         )
     check_version([str(audit_python()), "-I", "-m", "pip_audit", "--version"], PIP_AUDIT_VERSION)
-    print("Pinned Gitleaks and pip-audit installed in .security-tools.")
+    print("Pinned Betterleaks and pip-audit installed in .security-tools.")
 
 
 def commit(repo: Path, value: str) -> str:
@@ -190,47 +256,51 @@ def outgoing(repo: Path, stdin: str) -> list[tuple[str, str]]:
 def scan_secrets(repo: Path, revisions: list[str]) -> None:
     if git(repo, "rev-parse", "--is-shallow-repository") != "false":
         raise SecurityError("Shallow history cannot be scanned completely; fetch --unshallow first.")
-    executable = TOOLS / "gitleaks.exe"
-    check_version([str(executable), "version"], GITLEAKS_VERSION)
-    with tempfile.TemporaryDirectory(prefix="app-activity-secrets-") as directory:
-        report = Path(directory) / "findings.json"
-        common = [
-            "--config", str(ROOT / ".gitleaks.toml"),
-            "--gitleaks-ignore-path", str(repo / ".gitleaksignore"),
-            "--ignore-gitleaks-allow", "--redact=100", "--no-banner", "--no-color",
-            "--log-level", "error", "--report-format", "json", "--report-path", str(report),
-        ]
-        for revision in revisions:
-            options = f"--full-history -m {revision}"
-            for mode in ("git", "stdin"):
-                arguments = [str(executable), mode, *common]
-                text = None
-                if mode == "git":
-                    arguments += ["--log-opts=" + options, str(repo)]
-                else:
-                    text = git(repo, "log", "--format=%B", *revision.split())
-                result = run(arguments, cwd=repo, input=text, env=clean_environment())
-                if result.returncode not in (0, 1) or not report.exists():
-                    raise SecurityError(
-                        f"Gitleaks failed (exit {result.returncode}); scan incomplete. "
-                        "Raw scanner output is withheld to protect secrets."
-                    )
-                try:
-                    findings = json.loads(report.read_text(encoding="utf-8"))
-                except (ValueError, OSError) as error:
-                    raise SecurityError("Gitleaks produced an unreadable report; scan incomplete.") from error
-                if not isinstance(findings, list):
-                    raise SecurityError("Gitleaks report has an unexpected format.")
-                if findings:
-                    for finding in findings:
-                        print(json.dumps({
-                            key: finding.get(key)
-                            for key in ("RuleID", "File", "StartLine", "Commit", "Fingerprint")
-                        }))
-                    raise SecurityError("Secret detected. Remove it from outgoing history and rotate real credentials.")
-                if result.returncode:
-                    raise SecurityError("Gitleaks returned an error without findings; scan incomplete.")
-                report.unlink()
+    executable = TOOLS / "betterleaks.exe"
+    check_version([str(executable), "version"], BETTERLEAKS_VERSION)
+    if sys.platform == "win32" and not git_supports_isolation(clean_environment()):
+        raise SecurityError(
+            "Git for Windows cannot read the scanner's isolated configuration; scan incomplete. "
+            "Run setup to install the corrected repository-local Git without changing system Git."
+        )
+    # Native redaction can leave secrets in commit metadata; never persist raw reports.
+    common = [
+        "--config", str(ROOT / ".betterleaks.toml"),
+        "--gitleaks-ignore-path", str(repo / ".betterleaksignore"),
+        "--ignore-gitleaks-allow", "--redact=100", "--no-banner", "--no-color",
+        "--log-level", "error", "--report-format", "json", "--report-path", "-",
+        "--validation=false", "--max-archive-depth=0", "--max-decode-depth=0",
+    ]
+    for revision in revisions:
+        options = f"--full-history -m {revision}"
+        for mode in ("git", "stdin"):
+            arguments = [str(executable), mode, *common]
+            text = None
+            if mode == "git":
+                arguments += ["--git-workers=0", "--log-opts=" + options, str(repo)]
+            else:
+                text = git(repo, "log", "--format=%B", *revision.split())
+            result = run(arguments, cwd=repo, input=text, env=clean_environment())
+            if result.returncode not in (0, 1) or result.stderr.strip():
+                raise SecurityError(
+                    f"Betterleaks failed or reported an error (exit {result.returncode}); scan incomplete. "
+                    "Raw scanner output is withheld to protect secrets."
+                )
+            try:
+                findings = json.loads(result.stdout)
+            except ValueError as error:
+                raise SecurityError("Betterleaks produced an unreadable report; scan incomplete.") from error
+            if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):
+                raise SecurityError("Betterleaks report has an unexpected format.")
+            if findings:
+                for finding in findings:
+                    print(json.dumps({
+                        key: finding.get(key)
+                        for key in ("RuleID", "File", "StartLine", "Commit", "Fingerprint")
+                    }))
+                raise SecurityError("Secret detected. Remove it from outgoing history and rotate real credentials.")
+            if result.returncode:
+                raise SecurityError("Betterleaks returned an error without findings; scan incomplete.")
     print("Secret scan passed (commit patches, merge changes, and commit messages).")
 
 
