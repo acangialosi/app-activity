@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from tools import security_check as security
+from tools import ci_security as security
 
 
 class RepositoryFixture(unittest.TestCase):
@@ -41,26 +41,8 @@ class RepositoryFixture(unittest.TestCase):
         self.git("commit", "-q", "-m", "Fixture update")
         return self.git("rev-parse", "HEAD")
 
-    def push_line(self, head: str, base: str | None = None) -> str:
-        return f"refs/heads/local {head} refs/heads/remote {base or '0' * 40}\n"
-
 
 class RepositoryTests(RepositoryFixture):
-    def test_multiple_new_existing_and_deleted_refs(self) -> None:
-        head = self.save("file.txt", "clean\n")
-        deleted = f"(delete) {'0' * 40} refs/heads/old {self.base}\n"
-        stdin = self.push_line(head, self.base) + self.push_line(head) + deleted
-        self.assertEqual(security.outgoing(self.repo, stdin), [
-            (f"{self.base}..{head}", head), (head, head),
-        ])
-        self.assertEqual(security.outgoing(self.repo, deleted), [])
-        self.assertEqual(security.outgoing(self.repo, ""), [])
-
-    def test_bad_input_and_unknown_remote_base_fail(self) -> None:
-        for stdin in ("malformed", self.push_line("invalid"), self.push_line(self.base, "f" * 40)):
-            with self.subTest(stdin=stdin), self.assertRaises(security.SecurityError):
-                security.outgoing(self.repo, stdin)
-
     def test_dependency_snapshot_ignores_uncommitted_and_other_branch_changes(self) -> None:
         head = self.save("requirements-build.txt", "pyinstaller==6.22.2\n")
         (self.repo / "requirements-build.txt").write_text("pyinstaller==0.0.0\n")
@@ -84,26 +66,6 @@ class RepositoryTests(RepositoryFixture):
         with self.assertRaises(security.SecurityError):
             security.dependency_manifests(self.repo, head)
 
-    def test_custom_hooks_path_is_not_modified(self) -> None:
-        directory = Path(self.temporary.name) / "existing-hooks"
-        directory.mkdir()
-        (directory / "pre-push").write_text("existing hook")
-        self.git("config", "core.hooksPath", str(directory))
-        with self.assertRaises(security.SecurityError):
-            security.install_hook(self.repo)
-        self.assertEqual((directory / "pre-push").read_text(), "existing hook")
-        self.assertEqual(self.git("config", "core.hooksPath"), str(directory))
-
-    def test_hook_install_failure_restores_existing_hook(self) -> None:
-        original = self.repo / ".git" / "hooks" / "pre-push"
-        original.write_text("#!/bin/sh\nexit 0\n")
-        before = original.read_bytes()
-        with patch.object(Path, "replace", side_effect=PermissionError):
-            with self.assertRaises(PermissionError):
-                security.install_hook(self.repo)
-        self.assertEqual(original.read_bytes(), before)
-        self.assertFalse(original.with_name("pre-push.before-security").exists())
-
     def test_audit_uses_committed_manifests_and_deduplicates_snapshots(self) -> None:
         clean = subprocess.CompletedProcess(
             [], 0, json.dumps({"dependencies": [{"name": "fixture", "vulns": []}]}), "",
@@ -124,49 +86,6 @@ class RepositoryTests(RepositoryFixture):
         self.assertNotIn("--no-deps", arguments)
         self.assertEqual(runner.call_args.kwargs["env"]["PIP_ONLY_BINARY"], ":all:")
         self.assertNotEqual(runner.call_args.kwargs["cwd"], self.repo)
-
-    def test_hook_preserves_arguments_stdin_and_original_failure(self) -> None:
-        hooks = self.repo / ".git" / "hooks"
-        original = hooks / "pre-push"
-        original.write_text(
-            '#!/bin/sh\ncat > original-stdin\nprintf "%s\\n" "$@" > original-args\nexit 7\n',
-            newline="\n",
-        )
-        original.chmod(0o755)
-        helper = Path(self.temporary.name) / "helper.py"
-        helper.write_text(
-            "import pathlib,sys\n"
-            "pathlib.Path('security-stdin').write_text(sys.stdin.read())\n"
-            "pathlib.Path('security-args').write_text('\\n'.join(sys.argv[2:])+'\\n')\n"
-        )
-        with patch.object(security, "__file__", str(helper)):
-            security.install_hook(self.repo)
-            security.install_hook(self.repo)
-        remote = Path(self.temporary.name) / "remote.git"
-        self.git("init", "--bare", "-q", str(remote))
-        self.git("remote", "add", "fixture", str(remote))
-        result = subprocess.run(
-            ["git", "push", "fixture", "HEAD:refs/heads/test"],
-            cwd=self.repo, capture_output=True, text=True,
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(
-            (self.repo / "security-stdin").read_text(),
-            (self.repo / "original-stdin").read_text(),
-        )
-        self.assertEqual(
-            (self.repo / "security-args").read_text(),
-            (self.repo / "original-args").read_text(),
-        )
-        self.assertTrue((hooks / "pre-push.before-security").exists())
-        helper.write_text("raise SystemExit(9)\n")
-        (self.repo / "original-stdin").unlink()
-        result = subprocess.run(
-            ["git", "push", "fixture", "HEAD:refs/heads/test"],
-            cwd=self.repo, capture_output=True, text=True,
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse((self.repo / "original-stdin").exists())
 
 
 class AuditTests(unittest.TestCase):
@@ -229,7 +148,7 @@ class AuditTests(unittest.TestCase):
             security, "TOOLS", Path(directory)
         ), patch("urllib.request.urlopen", return_value=io.BytesIO(b"not a trusted release")):
             with self.assertRaisesRegex(security.SecurityError, "checksum mismatch"):
-                security.setup()
+                security.setup_secrets()
             self.assertFalse((Path(directory) / "betterleaks.exe").exists())
 
 
@@ -312,12 +231,42 @@ class ToolSetupTests(unittest.TestCase):
                 "urllib.request.urlopen", return_value=io.BytesIO(archive)
             ), patch.object(security, "check_version", side_effect=security.SecurityError("version mismatch")):
                 with self.assertRaises(security.SecurityError):
-                    security.setup()
+                    security.setup_secrets()
             self.assertEqual(executable.read_bytes(), b"previous scanner")
             self.assertEqual(list(self.tools.iterdir()), [executable])
 
 
-@unittest.skipUnless((security.TOOLS / "betterleaks.exe").exists(), "Run security_check.py setup for real scanner tests")
+class CICommandTests(unittest.TestCase):
+    def test_no_local_command_installs_tools_or_scans(self) -> None:
+        for command in ("setup-secrets", "setup-dependencies", "secrets", "dependencies"):
+            with self.subTest(command=command), patch.dict(os.environ, {}, clear=True), patch(
+                "sys.argv", ["ci_security.py", command]
+            ), patch.object(security, "setup_secrets") as secrets, patch.object(
+                security, "setup_dependencies"
+            ) as dependencies, patch.object(security, "repository") as repository, contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(security.main(), 1)
+            secrets.assert_not_called()
+            dependencies.assert_not_called()
+            repository.assert_not_called()
+
+    def test_ci_setup_installs_only_requested_tool(self) -> None:
+        for command in ("setup-secrets", "setup-dependencies"):
+            with self.subTest(command=command), patch.dict(os.environ, {
+                "GITHUB_ACTIONS": "true", "RUNNER_TEMP": tempfile.gettempdir(),
+            }), patch("sys.argv", ["ci_security.py", command]), patch.object(
+                security, "setup_secrets"
+            ) as secrets, patch.object(security, "setup_dependencies") as dependencies:
+                self.assertEqual(security.main(), 0)
+                self.assertEqual(secrets.call_count, int(command == "setup-secrets"))
+                self.assertEqual(dependencies.call_count, int(command == "setup-dependencies"))
+
+    def test_tools_live_outside_repository(self) -> None:
+        self.assertFalse(security.TOOLS.is_relative_to(security.ROOT))
+        self.assertFalse(hasattr(security, "install_hook"))
+        self.assertFalse(hasattr(security, "outgoing"))
+
+
+@unittest.skipUnless((security.TOOLS / "betterleaks.exe").exists(), "Real scanner fixtures run in the security CI job")
 class BetterleaksTests(RepositoryFixture):
     def token(self) -> str:
         return "gh" + "p_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
@@ -350,24 +299,17 @@ class BetterleaksTests(RepositoryFixture):
     def test_clean_history_passes(self) -> None:
         security.scan_secrets(self.repo, ["--all HEAD"])
 
-    def test_secret_added_then_deleted_is_blocked_for_new_and_existing_ref(self) -> None:
+    def test_secret_added_then_deleted_is_blocked_in_full_history(self) -> None:
         self.save("credential.txt", 'token = "' + self.token() + '"\n')
         self.git("rm", "-q", "credential.txt")
         self.git("commit", "-q", "-m", "Remove fixture")
-        head = self.git("rev-parse", "HEAD")
-        for stdin in (self.push_line(head, self.base), self.push_line(head)):
-            with self.subTest(stdin=stdin):
-                targets = security.outgoing(self.repo, stdin)
-                self.assert_secret_blocked([revision for revision, _ in targets])
+        self.assert_secret_blocked(["--all HEAD"])
 
     def test_non_checked_out_ref_and_multiple_refs_are_scanned(self) -> None:
-        secret_head = self.save("credential.txt", 'token = "' + self.token() + '"\n')
+        self.save("credential.txt", 'token = "' + self.token() + '"\n')
         self.git("checkout", "-q", "--detach", self.base)
-        clean_head = self.save("clean.txt", "safe\n")
-        targets = security.outgoing(
-            self.repo, self.push_line(clean_head, self.base) + self.push_line(secret_head, self.base),
-        )
-        self.assert_secret_blocked([revision for revision, _ in targets])
+        self.save("clean.txt", "safe\n")
+        self.assert_secret_blocked(["--all HEAD"])
 
     def test_commit_message_secret_is_blocked(self) -> None:
         self.git("commit", "--allow-empty", "-q", "-m", "token = " + self.token())

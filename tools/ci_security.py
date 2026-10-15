@@ -7,7 +7,6 @@ import json
 import os
 import platform
 import re
-import shlex
 import subprocess
 import sys
 import tempfile
@@ -19,7 +18,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-TOOLS = ROOT / ".security-tools"
+TOOLS = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "app-activity-ci-security"
 BETTERLEAKS_VERSION = "1.9.0"
 PIP_AUDIT_VERSION = "2.10.1"
 BETTERLEAKS_HASHES = {
@@ -31,12 +30,10 @@ MINGIT_HASHES = {
     "arm64": "38b33dc6024026e3315cf88ab2cfea65205bbd7bb3a8e824bd21c8ad4fe609a7",
     "x64": "da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be",
 }
-HOOK_MARKER = "# App Activity security pre-push hook"
 PIN = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9,._-]+\])?"
     r"==[A-Za-z0-9][A-Za-z0-9.!+_-]*(?:\s*;\s*.+)?"
 )
-OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 
 
 class SecurityError(Exception):
@@ -55,7 +52,7 @@ def run(
     except FileNotFoundError as error:
         raise SecurityError(
             f"Required tool is missing: {Path(command[0]).name}. "
-            "Run python tools\\security_check.py setup."
+            "Check the security workflow's tool-installation step."
         ) from error
     except subprocess.TimeoutExpired as error:
         raise SecurityError(
@@ -130,7 +127,7 @@ def setup_git(architecture: str) -> None:
         return
     destination = local_git().parent.parent
     if destination.exists():
-        raise SecurityError("Repository-local Git is incomplete or incompatible; repair its installation.")
+        raise SecurityError("Runner Git is incomplete or incompatible; rerun the security job.")
     version = MINGIT_VERSION.replace(".windows.", ".")
     suffix = {"arm64": "arm64", "x64": "64-bit"}[architecture]
     url = (
@@ -150,7 +147,7 @@ def setup_git(architecture: str) -> None:
         if not git_supports_isolation(environment, executable):
             raise SecurityError("Downloaded MinGit failed its isolation compatibility check.")
         staging.rename(destination)
-    print(f"Installed repository-local Git {MINGIT_VERSION}; system Git and settings are unchanged.")
+    print(f"Installed isolated runner Git {MINGIT_VERSION}; system Git and settings are unchanged.")
 
 
 def audit_python() -> Path:
@@ -171,7 +168,7 @@ def verify_audit_interpreter() -> None:
     if result.returncode or actual != expected:
         raise SecurityError(
             "The security-tool environment uses a different Python version or architecture. "
-            "Use its original interpreter or move .security-tools aside and rerun setup."
+            "Rerun the security workflow with a fresh runner."
         )
 
 
@@ -180,11 +177,11 @@ def check_version(command: list[str], expected: str) -> None:
     if result.returncode or expected not in result.stdout.strip().split():
         raise SecurityError(
             f"Expected {Path(command[0]).name} version {expected}; "
-            "run python tools\\security_check.py setup."
+            "check the security workflow's tool-installation step."
         )
 
 
-def setup() -> None:
+def setup_secrets() -> None:
     if sys.platform != "win32":
         raise SecurityError("Tool setup supports Windows x64 and ARM64.")
     architecture = {"amd64": "x64", "arm64": "arm64"}.get(platform.machine().lower())
@@ -205,6 +202,11 @@ def setup() -> None:
         check_version([str(replacement), "version"], BETTERLEAKS_VERSION)
         replacement.replace(executable)
     setup_git(architecture)
+    print("Pinned Betterleaks installed in runner temporary storage.")
+
+
+def setup_dependencies() -> None:
+    TOOLS.mkdir(exist_ok=True)
     if not audit_python().exists():
         venv.EnvBuilder(with_pip=True).create(TOOLS / "venv")
     verify_audit_interpreter()
@@ -225,32 +227,7 @@ def setup() -> None:
             "wheel availability for this Python/Windows version; no global packages were changed."
         )
     check_version([str(audit_python()), "-I", "-m", "pip_audit", "--version"], PIP_AUDIT_VERSION)
-    print("Pinned Betterleaks and pip-audit installed in .security-tools.")
-
-
-def commit(repo: Path, value: str) -> str:
-    if not OID.fullmatch(value):
-        raise SecurityError("Invalid object ID in pre-push input.")
-    return git(repo, "rev-parse", "--verify", value + "^{commit}")
-
-
-def outgoing(repo: Path, stdin: str) -> list[tuple[str, str]]:
-    targets = []
-    for line in stdin.splitlines():
-        fields = line.split()
-        if len(fields) != 4:
-            raise SecurityError("Malformed pre-push ref input; refusing an incomplete scan.")
-        _, local, _, remote = fields
-        if not OID.fullmatch(local) or not OID.fullmatch(remote):
-            raise SecurityError("Invalid pre-push object ID.")
-        if set(local) == {"0"}:
-            continue
-        head = commit(repo, local)
-        base = None if set(remote) == {"0"} else commit(repo, remote)
-        target = (f"{base}..{head}" if base else head, head)
-        if target not in targets:
-            targets.append(target)
-    return targets
+    print("Pinned pip-audit installed in runner temporary storage.")
 
 
 def scan_secrets(repo: Path, revisions: list[str]) -> None:
@@ -261,7 +238,7 @@ def scan_secrets(repo: Path, revisions: list[str]) -> None:
     if sys.platform == "win32" and not git_supports_isolation(clean_environment()):
         raise SecurityError(
             "Git for Windows cannot read the scanner's isolated configuration; scan incomplete. "
-            "Run setup to install the corrected repository-local Git without changing system Git."
+            "Check the workflow's scanner setup step for the corrected isolated runner Git."
         )
     # Native redaction can leave secrets in commit metadata; never persist raw reports.
     common = [
@@ -311,13 +288,13 @@ def dependency_manifests(repo: Path, revision: str) -> dict[str, str]:
         "poetry.lock", "uv.lock", "package.json",
     }
     if any(Path(name).name in unsupported for name in files):
-        raise SecurityError("A new dependency manifest format needs audit support before pushing.")
+        raise SecurityError("A new dependency manifest format needs audit support before merging.")
     manifests = {}
     for name in files:
         path = Path(name)
         if path.name.startswith("requirements") and path.suffix == ".txt":
             if len(path.parts) != 1:
-                raise SecurityError("Nested requirements need explicit audit support before pushing.")
+                raise SecurityError("Nested requirements need explicit audit support before merging.")
             content = git(repo, "show", f"{revision}:{name}")
             for line in content.splitlines():
                 line = line.strip()
@@ -396,82 +373,26 @@ def audit_dependencies(repo: Path, revisions: list[str]) -> None:
             )
 
 
-def install_hook(repo: Path) -> None:
-    configured = run(["git", "config", "--get", "core.hooksPath"], cwd=repo)
-    if configured.returncode != 1:
-        raise SecurityError(
-            "An existing core.hooksPath configuration was left unchanged. "
-            "Integrate this command into your existing pre-push hook manually."
-        )
-    hooks = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-path", "hooks"))
-    hooks.mkdir(exist_ok=True)
-    hook, previous = hooks / "pre-push", hooks / "pre-push.before-security"
-    if hook.is_symlink() or previous.is_symlink():
-        raise SecurityError("Existing hook symlink was left unchanged; integrate the check manually.")
-    preserve = hook.exists() and HOOK_MARKER not in hook.read_text(encoding="utf-8", errors="replace")
-    if preserve:
-        if previous.exists():
-            raise SecurityError("Hook backup already exists; refusing to overwrite either existing hook.")
-    quote = lambda path: shlex.quote(Path(path).as_posix())
-    content = (
-        f"#!/bin/sh\n{HOOK_MARKER}\n"
-        'input=$(mktemp) || exit 1\n'
-        'trap \'rm -f "$input"\' EXIT HUP INT TERM\n'
-        'cat > "$input" || exit 1\n'
-        f'{quote(sys.executable)} {quote(Path(__file__).resolve())} pre-push "$@" '
-        '< "$input" || exit $?\n'
-    )
-    if preserve or previous.exists():
-        content += f'{quote(previous)} "$@" < "$input"\n'
-    with tempfile.NamedTemporaryFile(
-        mode="w", dir=hooks, prefix="pre-push-security-", delete=False,
-        encoding="utf-8", newline="\n",
-    ) as temporary:
-        replacement = Path(temporary.name)
-        temporary.write(content)
-    try:
-        replacement.chmod(replacement.stat().st_mode | 0o111)
-        if preserve:
-            hook.rename(previous)
-        try:
-            replacement.replace(hook)
-        except OSError:
-            if preserve:
-                previous.rename(hook)
-            raise
-    finally:
-        replacement.unlink(missing_ok=True)
-    print("Installed repository-local pre-push hook; any previous hook is preserved and chained.")
-
-
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Local, fail-closed repository security checks.")
+    parser = argparse.ArgumentParser(description="Security checks for GitHub Actions runners.")
     parser.add_argument(
-        "command", choices=("setup", "install-hook", "check", "secrets", "dependencies", "pre-push"),
+        "command", choices=("setup-secrets", "setup-dependencies", "secrets", "dependencies"),
     )
-    parser.add_argument("remote", nargs="?", help=argparse.SUPPRESS)
-    parser.add_argument("remote_url", nargs="?", help=argparse.SUPPRESS)
     args = parser.parse_args()
     try:
-        if args.command == "setup":
-            setup()
+        if os.environ.get("GITHUB_ACTIONS") != "true" or not os.environ.get("RUNNER_TEMP"):
+            raise SecurityError("This helper runs in GitHub Actions; no local security setup is required.")
+        if args.command == "setup-secrets":
+            setup_secrets()
+            return 0
+        if args.command == "setup-dependencies":
+            setup_dependencies()
             return 0
         repo = repository()
-        if args.command == "install-hook":
-            install_hook(repo)
-            return 0
-        if args.command == "pre-push":
-            targets = outgoing(repo, sys.stdin.read())
-            if not targets:
-                print("No outgoing commits (empty push or ref deletions only).")
-                return 0
-            scan_secrets(repo, [revision for revision, _ in targets])
-            audit_dependencies(repo, [head for _, head in targets])
+        if args.command == "secrets":
+            scan_secrets(repo, ["--all HEAD"])
         else:
-            if args.command in ("check", "secrets"):
-                scan_secrets(repo, ["--all HEAD"])
-            if args.command in ("check", "dependencies"):
-                audit_dependencies(repo, [git(repo, "rev-parse", "HEAD")])
+            audit_dependencies(repo, [git(repo, "rev-parse", "HEAD")])
     except (SecurityError, OSError, zipfile.BadZipFile) as error:
         if isinstance(error, SecurityError):
             print(f"SECURITY CHECK FAILED: {error}", file=sys.stderr)

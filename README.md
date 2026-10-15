@@ -113,16 +113,15 @@ python -m unittest discover -s tests -v
 When Node.js is available, the suite also runs the dashboard's JavaScript
 behavior tests.
 
-### Pre-push security checks
+### Repository security protections
 
-```powershell
-python tools\security_check.py setup
-python tools\security_check.py check
-python tools\security_check.py install-hook
-```
+No local security-tool installation or Git hook is required. GitHub Actions
+scans fetched Git history with Betterleaks and audits committed Python
+dependencies with pip-audit on Windows/Python 3.11-3.14. Required checks block
+merging when findings or scanner failures occur. GitHub secret push protection,
+secret scanning, Dependabot alerts, and CodeQL remain enabled.
 
-The local hook uses Betterleaks to scan outgoing Git history for secrets and
-pip-audit to audit committed build/security dependencies, including transitive
-packages. GitHub runs the same checks independently. Findings, missing tools,
-and incomplete scans block the push. See [Security checks](docs/security-checks.md) for scope, prerequisites,
-existing-hook handling, failure remediation, and limitations.
+These CI checks run after a push, not on your workstation. GitHub push
+protection can reject supported secret patterns during a push.
+See [Security checks](docs/security-checks.md) for coverage, remediation,
+limitations, and cleanup instructions for older clones.
