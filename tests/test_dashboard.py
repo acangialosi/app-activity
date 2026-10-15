@@ -1,11 +1,43 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 import unittest
+from pathlib import Path
 
 from app_activity.dashboard import HTML
 
 
 class DashboardTests(unittest.TestCase):
+    def test_desktop_layout_scales_to_viewport_with_720_pixel_minimum(self) -> None:
+        self.assertIn("@media(min-width:751px)", HTML)
+        self.assertIn("height:max(720px,100dvh)", HTML)
+        self.assertIn("grid-template-rows:auto auto auto minmax(0,1fr)", HTML)
+        self.assertIn('class="card applications-card"', HTML)
+        self.assertIn("#apps{flex:1;min-height:0;overflow-y:auto", HTML)
+        self.assertIn("scrollbar-gutter:stable", HTML)
+        self.assertIn("@media(max-width:750px)", HTML)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required for JavaScript tests")
+    def test_application_filter_behavior(self) -> None:
+        result = subprocess.run(
+            ["node", str(Path(__file__).with_name("dashboard_filter_test.js"))],
+            input=HTML,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_application_list_controls_chart_filter(self) -> None:
+        self.assertNotIn("applicationSelect", HTML)
+        self.assertIn('class="app-select" type="button"', HTML)
+        self.assertIn('aria-controls="timeline"', HTML)
+        self.assertIn('aria-pressed="${x.name===selectedApplication}"', HTML)
+        self.assertIn('id="showAllApplications"', HTML)
+        self.assertIn('<details class="app-details"><summary>', HTML)
+
     def test_current_period_button_resets_offset(self) -> None:
         self.assertIn('id="currentPeriod"', HTML)
         self.assertIn(">Now</button>", HTML)

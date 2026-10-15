@@ -23,6 +23,14 @@ hour, day, week, month, and year views in a local browser dashboard.
   Browsers group by window and active page title so tab usage remains distinct.
 - The activity chart uses consistent per-application colors and can switch
   between absolute time and percentage-of-bucket views.
+- Select an application in the Applications list to filter the chart. Select it
+  again or choose **Show all** to clear the filter. Window-title details expand
+  separately, and report totals remain unchanged. The selection stays
+  in place when navigating periods or refreshing data; percentage mode shows
+  the application's share of all active time in each bucket.
+- On desktop, the dashboard fits the browser height down to 720 pixels, with
+  the application list scrolling within its panel. Shorter windows scroll the
+  page; narrow screens retain the stacked layout.
 - The dashboard supports light and dark themes or can follow the Windows theme.
   The selected preference is saved in the browser.
 - Previous and next controls navigate by the selected hour, day, week, month,
@@ -101,3 +109,6 @@ Authenticode-sign the application and installer during the build.
 ```powershell
 python -m unittest discover -s tests -v
 ```
+
+When Node.js is available, the suite also runs the dashboard's JavaScript
+behavior tests.
