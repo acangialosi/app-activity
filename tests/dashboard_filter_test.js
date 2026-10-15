@@ -16,6 +16,7 @@ function element(id) {
             value: "",
             className: "",
             disabled: false,
+            dataset: {},
             options: [],
             style: {setProperty() {}},
             appendChild(child) {this.options.push(child);},
@@ -50,6 +51,14 @@ const report = {
     ],
 };
 let response = report;
+let updateResponse = {
+    status: "current", version: "0.1.0", channel: "nightly",
+    message: "You're up to date.",
+    release_url: "https://github.com/acangialosi/app-activity/releases/tag/nightly",
+};
+let updateFailure = false;
+let updateHttpOk = true;
+let retryUpdate;
 let refresh;
 const context = vm.createContext({
     ...Object.fromEntries([
@@ -74,7 +83,14 @@ const context = vm.createContext({
     addEventListener() {},
     requestAnimationFrame: callback => callback(),
     setInterval: callback => {refresh = callback;},
-    fetch: async () => ({json: async () => response}),
+    setTimeout: callback => {retryUpdate = callback;},
+    fetch: async url => {
+        if (url === "/api/update") {
+            if (updateFailure) throw new Error("Offline");
+            return {ok: updateHttpOk, json: async () => updateResponse};
+        }
+        return {json: async () => response};
+    },
 });
 const run = code => vm.runInContext(code, context);
 const choose = name => {
@@ -182,5 +198,36 @@ async function test() {
     choose("");
     assert.equal(run("selectedApplication"), "");
     assert.ok(element("timeline").innerHTML.includes('class="bar-stack" style="height:1%"'));
+
+    await run("loadUpdate()");
+    assert.equal(element("updateStatus").dataset.status, "current");
+    assert.ok(element("updateMessage").textContent.includes("You're up to date."));
+    assert.equal(element("updateLink").textContent, "View releases");
+    updateResponse = {...updateResponse, status: "available", message: "Update available: <new build>"};
+    await run("loadUpdate()");
+    assert.equal(element("updateStatus").dataset.status, "available");
+    assert.ok(element("updateMessage").textContent.includes("<new build>"));
+    assert.equal(element("updateMessage").innerHTML, "");
+    assert.equal(element("updateLink").textContent, "Download update");
+    assert.equal(element("updateLink").href, updateResponse.release_url);
+    updateResponse = {...updateResponse, status: "pending", message: "Checking for updates..."};
+    await run("loadUpdate()");
+    assert.equal(typeof retryUpdate, "function");
+    updateResponse = {...updateResponse, status: "error", message: "Could not check for updates"};
+    await retryUpdate();
+    assert.equal(element("updateStatus").dataset.status, "error");
+    assert.equal(element("updateLink").textContent, "View releases");
+    updateResponse = {...updateResponse, status: "source", channel: undefined, message: "Running from source"};
+    await run("loadUpdate()");
+    assert.equal(element("updateStatus").dataset.status, "source");
+    assert.ok(!element("updateMessage").textContent.includes("undefined"));
+    updateHttpOk = false;
+    await run("loadUpdate()");
+    assert.equal(element("updateStatus").dataset.status, "error");
+    assert.ok(element("updateMessage").textContent.includes("Check GitHub releases manually"));
+    updateFailure = true;
+    await run("loadUpdate()");
+    assert.equal(element("updateStatus").dataset.status, "error");
+    assert.equal(element("updateLink").href, updateResponse.release_url);
 }
 test().catch(error => {console.error(error); process.exitCode = 1;});

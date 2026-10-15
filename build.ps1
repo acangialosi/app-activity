@@ -19,6 +19,22 @@ if ($LASTEXITCODE -ne 0) {
     throw "Failed to generate the application icon."
 }
 
+$versionText = Get-Content "$root\app_activity\__init__.py" -Raw
+$version = [regex]::Match($versionText, '__version__ = "([^"]+)"').Groups[1].Value
+if (-not $version) {
+    throw "Could not determine the App Activity version."
+}
+$channel = if ($env:GITHUB_REF -like "refs/tags/*") { "stable" } else { "nightly" }
+$metadata = [ordered]@{
+    schema = 1
+    version = $version
+    channel = $channel
+    built_at = [DateTime]::UtcNow.ToString("o")
+} | ConvertTo-Json
+New-Item -ItemType Directory -Force "$root\build\metadata", "$root\artifacts" | Out-Null
+$metadata | Set-Content "$root\build\metadata\build_info.json" -Encoding UTF8
+$metadata | Set-Content "$root\artifacts\AppActivity-update.json" -Encoding UTF8
+
 python -m PyInstaller --noconfirm --clean "$root\AppActivity.spec"
 if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller failed."
@@ -68,12 +84,6 @@ $innoCandidates = @(
 $iscc = $innoCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) {
     throw "Inno Setup 6 was not found. Install it with: winget install JRSoftware.InnoSetup"
-}
-
-$versionText = Get-Content "$root\app_activity\__init__.py" -Raw
-$version = [regex]::Match($versionText, '__version__ = "([^"]+)"').Groups[1].Value
-if (-not $version) {
-    throw "Could not determine the App Activity version."
 }
 
 & $iscc "/DMyAppVersion=$version" "$root\installer\AppActivity.iss"
