@@ -28,6 +28,9 @@ hour, day, week, month, and year views in a local browser dashboard.
   separately, and report totals remain unchanged. The selection stays
   in place when navigating periods or refreshing data; percentage mode shows
   the application's share of all active time in each bucket.
+- On desktop, the dashboard fits the browser height down to 720 pixels, with
+  the application list scrolling within its panel. Shorter windows scroll the
+  page; narrow screens retain the stacked layout.
 - The dashboard supports light and dark themes or can follow the Windows theme.
   The selected preference is saved in the browser.
 - Previous and next controls navigate by the selected hour, day, week, month,
