@@ -27,7 +27,7 @@ jobs:
       - name: Scan all available history
         run: python tools/security_check.py secrets
       - name: Verify security gates with isolated fixtures
-        run: python -m unittest discover -s tests -p test_security_check.py -v
+        run: python -m unittest discover -s tests -p "test_security*.py" -v
 
   security-dependencies:
     name: security-dependencies (${{ matrix.python }})

@@ -16,11 +16,13 @@ python tools\security_check.py check
 python tools\security_check.py install-hook
 ```
 
-Setup installs Gitleaks **8.30.1** from its official release, verifies the
-platform-specific SHA-256 checksum, and installs `pip-audit==2.10.1` in a
-dedicated virtual environment. Everything lives under the ignored
+Setup installs the Gitleaks version pinned in `tools/security_check.py` from its
+official release, verifies the platform-specific SHA-256 checksum, and installs
+`pip-audit==2.10.1` in a dedicated virtual environment. Everything lives under the ignored
 `.security-tools` directory; no global Python packages or Git settings change.
-Tool installation is explicit, never performed automatically during a push.
+Dependency-audit tool installation is explicit. Secret scans automatically
+install or refresh Gitleaks to the repository's checksum-pinned version when
+needed; they never select an unreviewed upstream release.
 If you change Python version or architecture, move the old tool directory
 aside and run setup with the new interpreter.
 
@@ -36,6 +38,50 @@ The installed hook references this checkout and interpreter. Moving the
 checkout, removing its security helper, or switching to a branch without the
 helper requires reinstalling or integrating the hook explicitly; it does not
 silently stop checking pushes.
+
+## Keeping detection rules current
+
+Gitleaks bundles detection rules with each release; these are not a live
+advisory database. The `Update Gitleaks` workflow checks the official latest
+stable release every Monday at 08:41 UTC and can also be run manually. If a newer
+release exists, it verifies both Windows archives against the official release
+checksums and opens a version-specific PR changing only the version and hashes.
+It never executes downloaded binaries in the updater job or auto-merges a PR.
+Existing update PRs, including closed ones, are not overwritten or reopened.
+An orphaned update branch causes an explicit failure for manual inspection.
+
+The repository must allow GitHub Actions to create pull requests (Settings >
+Actions > General > Workflow permissions). The job requests only contents and
+pull-request write permissions, uses the built-in token, and runs from the
+default branch, never on untrusted PR code. No personal token or new secret is
+needed. GitHub may require **Approve workflows to run** on the generated PR;
+approve those runs and wait for all existing required checks before merging.
+This does not add a required human code-review approval.
+
+After you merge an update PR and sync the repository, the next `secrets`,
+`check`, or installed pre-push invocation refreshes Gitleaks before scanning.
+An already-current binary needs no download. The replacement's checksum and
+version must match the repository pins before it atomically replaces the old
+binary. If a download, verification, or replacement fails, the scan fails; it
+does not continue with old rules. Git sync itself does not execute an installer
+or change Git hooks. Checking out an older repository revision uses that
+revision's pinned version, not necessarily the newest upstream release.
+
+The scheduled workflow becomes active only after its setup PR is merged.
+The local `pip-audit` setup requirement is unchanged; Gitleaks refresh does not
+repair dependency-audit network/TLS failures or install the pre-push hook.
+To propose an update manually, run:
+
+```powershell
+python tools\update_gitleaks.py
+```
+
+Review tool updates even when checksums match: the checksum file and downloads
+come from the same upstream release, not an independent trust source. New rules
+can reveal older secrets and can also introduce false positives. Gitleaks
+currently describes future releases as security patches only; automation
+cannot guarantee new patterns will be published. Evaluating another maintained
+scanner would be a separate change, not a silent migration.
 
 ## Commands and scope
 
@@ -139,7 +185,7 @@ policy or automatic security-update PR behavior is introduced.
 ## Validation and limitations
 
 ```powershell
-python -m unittest discover -s tests -p test_security_check.py -v
+python -m unittest discover -s tests -p "test_security*.py" -v
 ```
 
 Install the tools first to run real Gitleaks integration cases; those cases

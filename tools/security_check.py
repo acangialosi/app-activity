@@ -118,7 +118,7 @@ def check_version(command: list[str], expected: str) -> None:
         )
 
 
-def setup() -> None:
+def ensure_gitleaks() -> Path:
     if sys.platform != "win32":
         raise SecurityError("Tool setup supports Windows x64 and ARM64.")
     architecture = {"amd64": "x64", "arm64": "arm64"}.get(platform.machine().lower())
@@ -126,19 +126,38 @@ def setup() -> None:
         raise SecurityError("Unsupported Windows architecture; no scan was run.")
     TOOLS.mkdir(exist_ok=True)
     executable = TOOLS / "gitleaks.exe"
-    if not executable.exists():
-        asset = f"gitleaks_{GITLEAKS_VERSION}_windows_{architecture}.zip"
-        url = f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/{asset}"
-        try:
-            with urllib.request.urlopen(url, timeout=60) as response:
-                archive = response.read()
-        except (urllib.error.URLError, TimeoutError) as error:
-            raise SecurityError("Gitleaks download failed; check network access to GitHub.") from error
-        if hashlib.sha256(archive).hexdigest() != GITLEAKS_HASHES[architecture]:
-            raise SecurityError("Gitleaks download checksum mismatch; refusing to install.")
+    if executable.exists():
+        result = run(
+            [str(executable), "version"], cwd=ROOT, env=clean_environment(), timeout=30,
+        )
+        if result.returncode:
+            raise SecurityError("Cannot read the installed Gitleaks version; repair the local installation.")
+        if GITLEAKS_VERSION in result.stdout.strip().split():
+            return executable
+    print(f"Installing repository-pinned Gitleaks {GITLEAKS_VERSION}; verifying its checksum.")
+    asset = f"gitleaks_{GITLEAKS_VERSION}_windows_{architecture}.zip"
+    url = f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/{asset}"
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response:
+            archive = response.read()
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise SecurityError("Gitleaks download failed; no scan ran. Check network access to GitHub.") from error
+    if hashlib.sha256(archive).hexdigest() != GITLEAKS_HASHES[architecture]:
+        raise SecurityError("Gitleaks download checksum mismatch; refusing to install.")
+    with tempfile.TemporaryDirectory(prefix="gitleaks-update-", dir=TOOLS) as directory:
+        replacement = Path(directory) / "gitleaks.exe"
         with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
-            executable.write_bytes(zipped.read("gitleaks.exe"))
-    check_version([str(executable), "version"], GITLEAKS_VERSION)
+            try:
+                replacement.write_bytes(zipped.read("gitleaks.exe"))
+            except KeyError as error:
+                raise SecurityError("Gitleaks release archive is missing its executable.") from error
+        check_version([str(replacement), "version"], GITLEAKS_VERSION)
+        replacement.replace(executable)
+    return executable
+
+
+def setup() -> None:
+    ensure_gitleaks()
     if not audit_python().exists():
         venv.EnvBuilder(with_pip=True).create(TOOLS / "venv")
     verify_audit_interpreter()
@@ -190,8 +209,7 @@ def outgoing(repo: Path, stdin: str) -> list[tuple[str, str]]:
 def scan_secrets(repo: Path, revisions: list[str]) -> None:
     if git(repo, "rev-parse", "--is-shallow-repository") != "false":
         raise SecurityError("Shallow history cannot be scanned completely; fetch --unshallow first.")
-    executable = TOOLS / "gitleaks.exe"
-    check_version([str(executable), "version"], GITLEAKS_VERSION)
+    executable = ensure_gitleaks()
     with tempfile.TemporaryDirectory(prefix="app-activity-secrets-") as directory:
         report = Path(directory) / "findings.json"
         common = [

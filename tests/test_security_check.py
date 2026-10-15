@@ -287,7 +287,7 @@ class GitleaksTests(RepositoryFixture):
             security.scan_secrets(clone, ["--all HEAD"])
 
     def test_scanner_failure_is_blocking_without_echoing_sensitive_diagnostics(self) -> None:
-        with patch.object(security, "check_version"), patch.object(
+        with patch.object(security, "ensure_gitleaks", return_value=security.TOOLS / "gitleaks.exe"), patch.object(
             security, "run", return_value=subprocess.CompletedProcess([], 2, "", self.token())
         ), patch.object(security, "git", return_value="false"):
             with self.assertRaisesRegex(security.SecurityError, "incomplete") as raised:
