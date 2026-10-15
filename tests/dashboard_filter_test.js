@@ -2,8 +2,11 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-const html = fs.readFileSync(0, "utf8");
-const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+const scripts = JSON.parse(fs.readFileSync(0, "utf8"));
+assert.ok(
+    Array.isArray(scripts) && scripts.length > 0 && scripts.every(script => typeof script === "string"),
+    "Expected dashboard scripts extracted by the HTML parser",
+);
 const elements = new Map();
 function element(id) {
     if (!elements.has(id)) {
@@ -85,7 +88,7 @@ const choose = name => {
 };
 
 async function test() {
-    run(scripts.at(-1)[1]);
+    run(scripts.at(-1));
     await run("load()");
     const original = JSON.stringify(report);
     const allChart = element("timeline").innerHTML;
