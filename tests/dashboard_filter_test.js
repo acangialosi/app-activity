@@ -18,6 +18,7 @@ function element(id) {
             appendChild(child) {this.options.push(child);},
             add(option) {this.options.push(option);},
             replaceChildren(...children) {this.options = children;},
+            contains: () => true,
         });
     }
     return elements.get(id);
@@ -49,7 +50,7 @@ let response = report;
 let refresh;
 const context = vm.createContext({
     ...Object.fromEntries([
-        "applicationSelect", "timeline", "yAxis", "timeMode", "percentMode",
+        "showAllApplications", "filterStatus", "timeline", "yAxis", "timeMode", "percentMode",
         "themeSelect", "previousPeriod", "nextPeriod", "currentPeriod",
         "label", "active", "idle", "tracked", "apps",
     ].map(id => [id, element(id)])),
@@ -66,7 +67,6 @@ const context = vm.createContext({
             },
         }),
     },
-    Option: function(text, value) {this.text = text; this.value = value;},
     localStorage: {getItem: () => null, setItem() {}},
     addEventListener() {},
     requestAnimationFrame: callback => callback(),
@@ -75,8 +75,13 @@ const context = vm.createContext({
 });
 const run = code => vm.runInContext(code, context);
 const choose = name => {
-    element("applicationSelect").value = name;
-    element("applicationSelect").onchange();
+    if (!name) {
+        element("showAllApplications").onclick();
+        return;
+    }
+    const index = response.apps.findIndex(app => app.name === name);
+    assert.notEqual(index, -1);
+    element("apps").onclick({target: {closest: () => ({dataset: {appIndex: index}})}});
 };
 
 async function test() {
@@ -87,10 +92,11 @@ async function test() {
     const allApps = element("apps").innerHTML;
     const editorColor = /title="Editor: 1m" style="height:75%;background:([^"]+)"/
         .exec(allChart)[1];
-    assert.equal(element("applicationSelect").options.length, report.apps.length + 1);
-    assert.equal(element("applicationSelect").options[0].text, "All applications");
-    assert.ok(element("applicationSelect").options.some(x => x.value === "Other 15"));
-    assert.ok(element("applicationSelect").options.some(x => x.text === '<App & "name">'));
+    assert.equal((allApps.match(/class="app-select"/g) || []).length, report.apps.length);
+    assert.equal(element("filterStatus").textContent, "Chart: All applications");
+    assert.equal(element("showAllApplications").disabled, true);
+    assert.ok(allApps.includes("Other 15"));
+    assert.ok(allApps.includes("&lt;App &amp; &quot;name&quot;&gt;"));
 
     choose("Browser");
     let chart = element("timeline").innerHTML;
@@ -106,6 +112,14 @@ async function test() {
     assert.equal(run("chartBuckets(currentData).length"), 2);
     assert.equal(run("chartBuckets(currentData)[0].seconds"), 30);
     assert.equal(run("chartBuckets(currentData)[0].total_seconds"), 120);
+    assert.equal(element("filterStatus").textContent, "Chart: Browser");
+    assert.equal(element("showAllApplications").disabled, false);
+    choose("Browser");
+    assert.equal(element("timeline").innerHTML, allChart);
+    assert.equal(element("showAllApplications").disabled, true);
+    choose("Browser");
+    element("apps").onclick({target: {closest: () => null}});
+    assert.equal(run("selectedApplication"), "Browser");
 
     element("percentMode").onclick();
     chart = element("timeline").innerHTML;
@@ -124,7 +138,7 @@ async function test() {
 
     choose("Browser");
     await refresh();
-    assert.equal(element("applicationSelect").value, "Browser");
+    assert.equal(run("selectedApplication"), "Browser");
     assert.ok(!element("timeline").innerHTML.includes("Editor:"));
 
     response = {...report, period: "week", apps: [report.apps[0]], timeline: [
@@ -133,9 +147,9 @@ async function test() {
     ]};
     element("previousPeriod").onclick();
     await run("load()");
-    assert.equal(element("applicationSelect").value, "Browser");
-    assert.ok(element("applicationSelect").options.some(x =>
-        x.value === "Browser" && x.text === "Browser (no activity)"));
+    assert.equal(run("selectedApplication"), "Browser");
+    assert.equal(element("filterStatus").textContent, "Chart: Browser (no activity)");
+    assert.equal(element("showAllApplications").disabled, false);
     assert.equal((element("timeline").innerHTML.match(/bar-segment/g) || []).length, 0);
     assert.ok(element("timeline").innerHTML.includes('title="00: 0s"'));
     element("percentMode").onclick();
@@ -149,7 +163,7 @@ async function test() {
     for (const period of ["hour", "day", "week", "month", "year"]) {
         response = {...report, period};
         await run("load()");
-        assert.equal(element("applicationSelect").value, "Browser");
+        assert.equal(run("selectedApplication"), "Browser");
         assert.ok(element("timeline").innerHTML.includes("Browser: 25.0%"));
         element("timeMode").onclick();
         assert.ok(element("timeline").innerHTML.includes("Browser: 30s"));
@@ -160,10 +174,10 @@ async function test() {
         {label: "00", capacity_seconds: 3600, seconds: 0, apps: []},
     ]};
     await run("load()");
-    assert.equal(element("applicationSelect").value, "Browser");
+    assert.equal(run("selectedApplication"), "Browser");
     assert.ok(!element("timeline").innerHTML.includes("NaN"));
     choose("");
-    assert.equal(element("applicationSelect").value, "");
+    assert.equal(run("selectedApplication"), "");
     assert.ok(element("timeline").innerHTML.includes('class="bar-stack" style="height:1%"'));
 }
 test().catch(error => {console.error(error); process.exitCode = 1;});

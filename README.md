@@ -23,8 +23,9 @@ hour, day, week, month, and year views in a local browser dashboard.
   Browsers group by window and active page title so tab usage remains distinct.
 - The activity chart uses consistent per-application colors and can switch
   between absolute time and percentage-of-bucket views.
-- The chart's Application selector can show one application or all applications
-  without changing report totals or the application list. The selection stays
+- Select an application in the Applications list to filter the chart. Select it
+  again or choose **Show all** to clear the filter. Window-title details expand
+  separately, and report totals remain unchanged. The selection stays
   in place when navigating periods or refreshing data; percentage mode shows
   the application's share of all active time in each bucket.
 - The dashboard supports light and dark themes or can follow the Windows theme.

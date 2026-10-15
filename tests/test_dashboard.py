@@ -21,10 +21,13 @@ class DashboardTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_chart_has_labeled_application_filter(self) -> None:
-        self.assertIn('for="applicationSelect"', HTML)
-        self.assertIn('id="applicationSelect" aria-describedby="chartHelp"', HTML)
-        self.assertIn('<option value="">All applications</option>', HTML)
+    def test_application_list_controls_chart_filter(self) -> None:
+        self.assertNotIn("applicationSelect", HTML)
+        self.assertIn('class="app-select" type="button"', HTML)
+        self.assertIn('aria-controls="timeline"', HTML)
+        self.assertIn('aria-pressed="${x.name===selectedApplication}"', HTML)
+        self.assertIn('id="showAllApplications"', HTML)
+        self.assertIn('<details class="app-details"><summary>', HTML)
 
     def test_current_period_button_resets_offset(self) -> None:
         self.assertIn('id="currentPeriod"', HTML)
