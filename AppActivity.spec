@@ -9,7 +9,7 @@ a = Analysis(
     [str(root / "app_activity_launcher.py")],
     pathex=[str(root)],
     binaries=[],
-    datas=[],
+    datas=[(str(root / "build" / "metadata" / "build_info.json"), "app_activity")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

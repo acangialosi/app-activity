@@ -44,6 +44,12 @@ hour, day, week, month, and year views in a local browser dashboard.
   classified as idle rather than application usage.
 - A dedicated chart icon in the Windows system tray shows when tracking is
   running. Click it to open the usage report; right-click it to open or exit.
+- Packaged builds check GitHub for updates while the dashboard is open.
+  Successful checks are cached for an hour; failed checks retry after five
+  minutes. A highlighted notice links to the release when a newer build is
+  available; **View releases** is always available. Checks send no activity data,
+  require no account or extra service, and do not interrupt tracking when offline.
+  GitHub receives the usual download request metadata, including your IP address.
 
 ## Install
 
@@ -92,6 +98,16 @@ Pushing a `v*` tag creates a permanent versioned GitHub Release. Manual workflow
 runs produce a downloadable Actions artifact retained for one day without
 creating a release. Every push and pull request must pass the test suite before
 the installer is built, and publishing occurs only after both jobs succeed.
+
+Updates are downloaded and installed manually; the app never downloads or runs
+an installer automatically. Nightly installations follow the rolling `nightly`
+release, and tagged builds follow GitHub's latest stable release. Each installer
+bundles a build timestamp, also published as `AppActivity-update.json`, so nightly
+updates are detected even without a version-number change. Older or identical
+build timestamps do not trigger a notification. Source checkouts show a release
+link without checking for installer updates. Update checks require a release
+published with this metadata; older installations need a one-time manual upgrade
+to gain the notification.
 
 To build the installer:
 
