@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
 import subprocess
 import tempfile
+import threading
 import unittest
+import zipfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -203,11 +207,15 @@ class AuditTests(unittest.TestCase):
             "PIP_INDEX_URL": "https://example.invalid",
             "PIP_AUDIT_OUTPUT": "unexpected.json",
             "GITLEAKS_CONFIG_TOML": "unexpected",
+            "BETTERLEAKS_CONFIG_TOML": "unexpected",
+            "BETTERLEAKS_VALIDATION": "true",
         }):
             environment = security.clean_environment()
         self.assertEqual(environment["PIP_INDEX_URL"], "https://pypi.org/simple")
         self.assertNotIn("PIP_AUDIT_OUTPUT", environment)
         self.assertNotIn("GITLEAKS_CONFIG_TOML", environment)
+        self.assertNotIn("BETTERLEAKS_CONFIG_TOML", environment)
+        self.assertNotIn("BETTERLEAKS_VALIDATION", environment)
         self.assertEqual(environment["PIP_ONLY_BINARY"], ":all:")
 
     def test_different_audit_interpreter_fails(self) -> None:
@@ -222,21 +230,122 @@ class AuditTests(unittest.TestCase):
         ), patch("urllib.request.urlopen", return_value=io.BytesIO(b"not a trusted release")):
             with self.assertRaisesRegex(security.SecurityError, "checksum mismatch"):
                 security.setup()
-            self.assertFalse((Path(directory) / "gitleaks.exe").exists())
+            self.assertFalse((Path(directory) / "betterleaks.exe").exists())
 
 
-@unittest.skipUnless((security.TOOLS / "gitleaks.exe").exists(), "Run security_check.py setup for real scanner tests")
-class GitleaksTests(RepositoryFixture):
+class ToolSetupTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.tools = Path(temporary.name)
+        mock = patch.object(security, "TOOLS", self.tools)
+        mock.start()
+        self.addCleanup(mock.stop)
+
+    def archive(self, name: str) -> bytes:
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as archive:
+            archive.writestr(name, b"verified fixture")
+        return output.getvalue()
+
+    def test_compatible_system_git_does_not_download(self) -> None:
+        with patch.object(security, "git_supports_isolation", return_value=True), patch.object(
+            security, "download_release"
+        ) as download:
+            security.setup_git("x64")
+        download.assert_not_called()
+        self.assertFalse(security.local_git().exists())
+
+    def test_local_git_is_selected_only_for_security_subprocesses(self) -> None:
+        executable = security.local_git()
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"fixture")
+        before = dict(os.environ)
+        environment = security.clean_environment()
+        self.assertTrue(environment["PATH"].startswith(str(executable.parent) + os.pathsep))
+        with patch.object(
+            security, "run", return_value=subprocess.CompletedProcess([], 0, "true", "")
+        ) as run:
+            self.assertTrue(security.git_supports_isolation(environment))
+        self.assertEqual(run.call_args.args[0][0], str(executable))
+        self.assertEqual(run.call_args.kwargs["env"]["GIT_CONFIG_GLOBAL"], "NUL")
+        self.assertEqual(run.call_args.kwargs["env"]["GIT_CONFIG_NOSYSTEM"], "1")
+        self.assertEqual(dict(os.environ), before)
+        self.assertNotIn("GIT_CONFIG_GLOBAL", environment.keys() - before.keys())
+
+    def test_git_fallback_is_verified_before_becoming_active(self) -> None:
+        archive = self.archive("cmd/git.exe")
+        with patch.object(security, "git_supports_isolation", side_effect=[False, True]) as probe, patch.object(
+            security, "download_release", return_value=archive
+        ) as download, patch.object(security, "check_version") as version:
+            security.setup_git("x64")
+        self.assertEqual(security.local_git().read_bytes(), b"verified fixture")
+        self.assertIn("MinGit-2.56.0.2-64-bit.zip", download.call_args.args[0])
+        self.assertEqual(download.call_args.args[1], security.MINGIT_HASHES["x64"])
+        self.assertEqual(version.call_args.args[1], security.MINGIT_VERSION)
+        self.assertEqual(probe.call_args.args[1], Path(version.call_args.args[0][0]))
+        self.assertNotEqual(probe.call_args.args[1], security.local_git())
+        with patch.object(security, "git_supports_isolation", return_value=True), patch.object(
+            security, "check_version"
+        ), patch.object(security, "download_release") as download:
+            security.setup_git("x64")
+        download.assert_not_called()
+
+    def test_failed_git_fallback_is_not_installed(self) -> None:
+        archive = self.archive("cmd/git.exe")
+        with patch.object(security, "git_supports_isolation", return_value=False), patch.object(
+            security, "download_release", return_value=archive
+        ), patch.object(security, "check_version"):
+            with self.assertRaisesRegex(security.SecurityError, "compatibility"):
+                security.setup_git("x64")
+        self.assertEqual(list(self.tools.iterdir()), [])
+
+    def test_scanner_setup_failure_preserves_existing_binary(self) -> None:
+        executable = self.tools / "betterleaks.exe"
+        executable.write_bytes(b"previous scanner")
+        for failure in ("checksum", "version"):
+            archive = self.archive("betterleaks.exe")
+            digest = "0" * 64 if failure == "checksum" else hashlib.sha256(archive).hexdigest()
+            with self.subTest(failure=failure), patch.object(
+                security.platform, "machine", return_value="AMD64"
+            ), patch.object(security, "BETTERLEAKS_HASHES", {"x64": digest}), patch(
+                "urllib.request.urlopen", return_value=io.BytesIO(archive)
+            ), patch.object(security, "check_version", side_effect=security.SecurityError("version mismatch")):
+                with self.assertRaises(security.SecurityError):
+                    security.setup()
+            self.assertEqual(executable.read_bytes(), b"previous scanner")
+            self.assertEqual(list(self.tools.iterdir()), [executable])
+
+
+@unittest.skipUnless((security.TOOLS / "betterleaks.exe").exists(), "Run security_check.py setup for real scanner tests")
+class BetterleaksTests(RepositoryFixture):
     def token(self) -> str:
         return "gh" + "p_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
 
     def assert_secret_blocked(self, revisions: list[str]) -> None:
-        with contextlib.redirect_stdout(io.StringIO()) as output:
+        run = security.run
+        scans = []
+
+        def inspect_report(command, **kwargs):
+            result = run(command, **kwargs)
+            if "--report-path" in command:
+                self.assertEqual(command[command.index("--report-path") + 1], "-")
+                self.assertIn("--redact=100", command)
+                self.assertIn("--validation=false", command)
+                scans.append(command)
+            return result
+
+        with contextlib.redirect_stdout(io.StringIO()) as output, patch.object(
+            security, "run", side_effect=inspect_report
+        ):
             with self.assertRaisesRegex(security.SecurityError, "Secret detected"):
                 security.scan_secrets(self.repo, revisions)
         self.assertNotIn(self.token(), output.getvalue())
         self.assertNotIn("Finding", output.getvalue())
         self.assertIn("RuleID", output.getvalue())
+        self.assertTrue(scans)
+        self.assertNotIn("Message", output.getvalue())
+        self.assertNotIn("Attributes", output.getvalue())
 
     def test_clean_history_passes(self) -> None:
         security.scan_secrets(self.repo, ["--all HEAD"])
@@ -264,6 +373,12 @@ class GitleaksTests(RepositoryFixture):
         self.git("commit", "--allow-empty", "-q", "-m", "token = " + self.token())
         self.assert_secret_blocked([self.base + "..HEAD"])
 
+    def test_commit_metadata_is_not_written_or_echoed(self) -> None:
+        (self.repo / "credential.txt").write_text('token = "' + self.token() + '"\n')
+        self.git("add", "credential.txt")
+        self.git("commit", "-q", "-m", "token = " + self.token())
+        self.assert_secret_blocked([self.base + "..HEAD"])
+
     def test_secret_in_initial_commit_is_blocked(self) -> None:
         self.git("checkout", "-q", "--orphan", "new-root")
         self.git("rm", "-q", "-rf", ".")
@@ -288,11 +403,84 @@ class GitleaksTests(RepositoryFixture):
 
     def test_scanner_failure_is_blocking_without_echoing_sensitive_diagnostics(self) -> None:
         with patch.object(security, "check_version"), patch.object(
+            security, "git_supports_isolation", return_value=True
+        ), patch.object(
             security, "run", return_value=subprocess.CompletedProcess([], 2, "", self.token())
         ), patch.object(security, "git", return_value="false"):
             with self.assertRaisesRegex(security.SecurityError, "incomplete") as raised:
                 security.scan_secrets(self.repo, ["--all HEAD"])
         self.assertNotIn(self.token(), str(raised.exception))
+
+    def test_error_diagnostics_block_even_with_zero_exit_code(self) -> None:
+        with patch.object(security, "check_version"), patch.object(
+            security, "git_supports_isolation", return_value=True
+        ), patch.object(
+            security, "run", return_value=subprocess.CompletedProcess([], 0, "", self.token())
+        ), patch.object(security, "git", return_value="false"):
+            with self.assertRaisesRegex(security.SecurityError, "incomplete") as raised:
+                security.scan_secrets(self.repo, ["--all HEAD"])
+        self.assertNotIn(self.token(), str(raised.exception))
+
+    def test_missing_malformed_and_failed_reports_block(self) -> None:
+        for code, report in ((0, ""), (0, "{}"), (0, "null"), (0, "[null]"), (1, "[]")):
+            with self.subTest(code=code, report=report), patch.object(
+                security, "check_version"
+            ), patch.object(
+                security, "git_supports_isolation", return_value=True
+            ), patch.object(
+                security, "git", return_value="false"
+            ), patch.object(
+                security, "run", return_value=subprocess.CompletedProcess([], code, report, "")
+            ):
+                with self.assertRaises(security.SecurityError):
+                    security.scan_secrets(self.repo, ["HEAD"])
+
+    def test_inline_allow_comments_do_not_bypass_detection(self) -> None:
+        for marker in ("gitleaks:allow", "betterleaks:allow"):
+            with self.subTest(marker=marker):
+                head = self.save("credential.txt", 'token = "' + self.token() + '" # ' + marker + "\n")
+                self.assert_secret_blocked([self.base + ".." + head])
+
+    def test_invalid_history_is_not_a_successful_scan(self) -> None:
+        with self.assertRaises(security.SecurityError):
+            security.scan_secrets(self.repo, ["does-not-exist"])
+
+    def test_provider_validation_stays_disabled(self) -> None:
+        requests = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            config = (
+                "[[rules]]\nid = 'fixture'\nregex = 'ghp_[A-Za-z0-9]{36}'\n"
+                "validate = '''\n"
+                f'let r = http.get("http://127.0.0.1:{server.server_port}/validate");\n'
+                'r.status == 200 ? {"result": "valid"} : {"result": "invalid"}\n'
+                "'''\n"
+            )
+            (self.repo / ".betterleaks.toml").write_text(config, encoding="utf-8")
+            self.save("credential.txt", 'token = "' + self.token() + '"\n')
+            with patch.object(security, "ROOT", self.repo), patch.dict(os.environ, {
+                "BETTERLEAKS_VALIDATION": "true",
+                "BETTERLEAKS_CONFIG": "nonexistent-config.toml",
+                "GITLEAKS_CONFIG_TOML": "invalid override",
+            }):
+                self.assert_secret_blocked(["--all HEAD"])
+            self.assertEqual(requests, [])
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
 
 
 if __name__ == "__main__":
