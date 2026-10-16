@@ -8,6 +8,31 @@ A lightweight, local-only Windows activity tracker. It records which application
 has the foreground window, separates active time from idle time, and provides
 hour, day, week, month, and year views in a local browser dashboard.
 
+## Screenshots
+
+These screenshots use synthetic demo activity, not personal tracking history.
+
+### Daily overview
+
+See active, idle, and total tracked time alongside an hourly breakdown by
+application.
+
+![Daily dashboard in light mode with active and idle totals, a stacked activity chart, and application usage](docs/screenshots/daily-overview.png)
+
+### Weekly trends and dark mode
+
+Compare each application's share of active time across the week. Expand an
+application to see time spent in individual window titles or browser pages.
+
+![Weekly dashboard in dark mode with percentage bars and expanded browser page details](docs/screenshots/weekly-percentage-dark.png)
+
+### Focus on one application
+
+Select an application to filter the chart without changing the report totals.
+The hour view shows five-minute buckets, with window-title details alongside.
+
+![Hourly dashboard filtered to Visual Studio Code with five-minute activity buckets and an expanded window title](docs/screenshots/hourly-application-details.png)
+
 ## Privacy and performance
 
 - All history stays in `%LOCALAPPDATA%\AppActivity\activity.db`.
