@@ -65,7 +65,7 @@ class DashboardTests(unittest.TestCase):
     def test_desktop_layout_scales_to_viewport_with_720_pixel_minimum(self) -> None:
         self.assertIn("@media(min-width:751px)", HTML)
         self.assertIn("height:max(720px,100dvh)", HTML)
-        self.assertIn("grid-template-rows:auto auto auto minmax(0,1fr)", HTML)
+        self.assertIn("grid-template-rows:auto auto auto auto minmax(0,1fr)", HTML)
         self.assertIn('class="card applications-card"', HTML)
         self.assertIn("#apps{flex:1;min-height:0;overflow-y:auto", HTML)
         self.assertIn("scrollbar-gutter:stable", HTML)
@@ -103,6 +103,12 @@ class DashboardTests(unittest.TestCase):
             "{periodOffset=0;load()}}",
             HTML,
         )
+
+    def test_csv_export_has_date_range_and_all_history_controls(self) -> None:
+        self.assertIn('action="/api/export" method="get"', HTML)
+        self.assertIn('id="exportStart" name="start" type="date" required', HTML)
+        self.assertIn('id="exportEnd" name="end" type="date" required', HTML)
+        self.assertIn('href="/api/export?all=1">Export all</a>', HTML)
 
     def test_chart_has_mode_aware_y_axis(self) -> None:
         self.assertIn('class="y-axis" id="yAxis"', HTML)
