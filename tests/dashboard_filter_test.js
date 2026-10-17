@@ -30,6 +30,8 @@ function element(id) {
 
 const report = {
     period: "day",
+    start: "2026-06-01T00:00:00+00:00",
+    end: "2026-06-02T00:00:00+00:00",
     label: "Today",
     active_seconds: 120,
     idle_seconds: 60,
@@ -64,6 +66,7 @@ const context = vm.createContext({
     ...Object.fromEntries([
         "showAllApplications", "filterStatus", "timeline", "yAxis", "timeMode", "percentMode",
         "themeSelect", "previousPeriod", "nextPeriod", "currentPeriod",
+        "exportStart", "exportEnd",
         "label", "active", "idle", "tracked", "apps",
     ].map(id => [id, element(id)])),
     document: {
@@ -106,6 +109,11 @@ const choose = name => {
 async function test() {
     run(scripts.at(-1));
     await run("load()");
+    assert.equal(element("exportStart").value, "2026-06-01");
+    assert.equal(element("exportEnd").value, "2026-06-01");
+    element("exportStart").value = "2026-05-01";
+    await run("load()");
+    assert.equal(element("exportStart").value, "2026-05-01");
     const original = JSON.stringify(report);
     const allChart = element("timeline").innerHTML;
     const allApps = element("apps").innerHTML;
