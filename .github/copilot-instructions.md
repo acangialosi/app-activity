@@ -10,6 +10,16 @@
 - Establish verifiable acceptance criteria from the requested behavior and
   existing repository conventions. Verify those outcomes directly; do not
   invent unrelated requirements or expand the task's scope.
+- Before implementing a feature, fixing a bug, or making other requested
+  implementation changes, create a feature branch and open a draft pull request.
+  Do not wait until the implementation is written to open the draft.
+- Outline the task, scope, acceptance criteria, intended approach, and validation
+  plan in the draft pull request description. If an initial commit is needed to
+  open the pull request, limit it to planning rather than feature or bug-fix
+  implementation.
+- Once the draft is open, proceed with implementation without waiting for
+  approval unless the user requested a planning checkpoint. Keep the pull
+  request description current as the work progresses.
 - Make routine implementation decisions independently. Ask only when a material
   product decision, genuinely missing requirement, destructive action, or
   required permission prevents safe progress.
@@ -33,10 +43,9 @@
 
 ## Pull requests and review feedback
 
-- For new implementation work, create a feature branch, commit and push the
-  changes, and open a draft pull request without waiting for another request.
-  Keep it in draft until the acceptance criteria, required checks, and review
-  feedback have been addressed.
+- Commit and push implementation changes to the draft pull request opened
+  before implementation. Keep it in draft until the acceptance criteria,
+  required checks, and review feedback have been addressed.
 - After each push, wait for Copilot's code review of the latest commit. Passing
   CI checks alone does not mean the review is complete.
 - Read the review summaries, inline comments, and unresolved review threads.
