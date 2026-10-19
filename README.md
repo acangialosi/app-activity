@@ -48,11 +48,13 @@ The hour view shows five-minute buckets, with window-title details alongside.
   Browsers group by window and active page title so tab usage remains distinct.
 - The activity chart uses consistent per-application colors and can switch
   between absolute time and percentage-of-bucket views.
-- Select an application in the Applications list to filter the chart. Select it
-  again or choose **Show all** to clear the filter. Window-title details expand
-  separately, and report totals remain unchanged. The selection stays
-  in place when navigating periods or refreshing data; percentage mode shows
-  the application's share of all active time in each bucket.
+- Click an application in the Applications list to show only it; click the sole
+  selected application again to show all. **Ctrl+click** adds or removes an
+  application from the chart selection; removing the last or choosing **Show all**
+  clears the filter. Window-title details expand separately, and report totals
+  remain unchanged. Selections stay in place when navigating periods or refreshing
+  data, including applications with no activity in a period; percentage mode
+  shows each application's share of all active time in each bucket.
 - On desktop, the dashboard fits the browser height down to 720 pixels, with
   the application list scrolling within its panel. Shorter windows scroll the
   page; narrow screens retain the stacked layout.
