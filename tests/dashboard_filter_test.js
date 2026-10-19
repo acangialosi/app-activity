@@ -114,6 +114,20 @@ async function test() {
     element("exportStart").value = "2026-05-01";
     await run("load()");
     assert.equal(element("exportStart").value, "2026-05-01");
+    for (const [start, end, expectedStart, expectedEnd] of [
+        ["2026-01-01T00:00:00-04:00", "2027-01-01T00:00:00-04:00", "2026-01-01", "2026-12-31"],
+        ["2026-03-01T00:00:00-07:00", "2026-04-01T00:00:00-07:00", "2026-03-01", "2026-03-31"],
+        ["2024-02-01T00:00:00+05:30", "2024-03-01T00:00:00+05:30", "2024-02-01", "2024-02-29"],
+        ["2026-06-01T12:00:00+00:00", "2026-06-01T13:00:00+00:00", "2026-06-01", "2026-06-01"],
+        ["2026-06-01T23:00:00-07:00", "2026-06-02T00:00:00-07:00", "2026-06-01", "2026-06-01"],
+    ]) {
+        response = {...report, start, end};
+        await run("load()");
+        assert.equal(element("exportStart").value, expectedStart);
+        assert.equal(element("exportEnd").value, expectedEnd);
+    }
+    response = report;
+    await run("load()");
     const original = JSON.stringify(report);
     const allChart = element("timeline").innerHTML;
     const allApps = element("apps").innerHTML;

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import unittest
@@ -76,15 +77,18 @@ class DashboardTests(unittest.TestCase):
         parser = ScriptParser()
         parser.feed(HTML)
         parser.close()
-        result = subprocess.run(
-            ["node", str(Path(__file__).with_name("dashboard_filter_test.js"))],
-            input=json.dumps(parser.scripts),
-            text=True,
-            encoding="utf-8",
-            capture_output=True,
-            timeout=30,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for timezone in ("UTC", "America/New_York", "America/Los_Angeles"):
+            with self.subTest(timezone=timezone):
+                result = subprocess.run(
+                    ["node", str(Path(__file__).with_name("dashboard_filter_test.js"))],
+                    input=json.dumps(parser.scripts),
+                    text=True,
+                    encoding="utf-8",
+                    capture_output=True,
+                    timeout=30,
+                    env={**os.environ, "TZ": timezone},
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_application_list_controls_chart_filter(self) -> None:
         self.assertNotIn("applicationSelect", HTML)

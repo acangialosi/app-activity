@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import threading
 import unittest
 from datetime import datetime, timedelta
@@ -22,6 +23,7 @@ class DashboardExportTests(unittest.TestCase):
             hour=0, minute=0, second=0, microsecond=0
         )
         self.day = start.date().isoformat()
+        self.next_day = (start + timedelta(days=1)).date().isoformat()
         self.database._connection().executemany(
             """
             INSERT INTO activity_segments(
@@ -73,17 +75,65 @@ class DashboardExportTests(unittest.TestCase):
         self.assertEqual("'=2+2", rows[0]["window_title"])
         self.assertEqual(1800, float(rows[0]["duration_seconds"]))
         self.assertEqual("False", rows[0]["idle"])
+        self.assertEqual(self.day, datetime.fromisoformat(rows[0]["start"]).date().isoformat())
+        self.assertEqual(
+            self.next_day,
+            datetime.fromisoformat(rows[0]["end"]).date().isoformat(),
+        )
+
+    def test_date_range_clips_start_and_preserves_idle_segments(self) -> None:
+        with urlopen(
+            f"{self.base_url}/api/export?start={self.next_day}&end={self.next_day}",
+            timeout=2,
+        ) as response:
+            rows = list(csv.DictReader(io.StringIO(response.read().decode("utf-8"))))
+        self.assertEqual(2, len(rows))
+        self.assertEqual(1800, float(rows[0]["duration_seconds"]))
+        self.assertEqual(0, datetime.fromisoformat(rows[0]["start"]).hour)
+        self.assertEqual(0, datetime.fromisoformat(rows[0]["start"]).minute)
+        self.assertEqual("Browser", rows[1]["application"])
+        self.assertEqual("True", rows[1]["idle"])
+        self.assertEqual("Idle title", rows[1]["window_title"])
+
+    def test_empty_range_exports_only_the_csv_header(self) -> None:
+        with urlopen(
+            f"{self.base_url}/api/export?start=2000-01-01&end=2000-01-01",
+            timeout=2,
+        ) as response:
+            rows = list(csv.reader(io.StringIO(response.read().decode("utf-8"))))
+        self.assertEqual(
+            [["start", "end", "application", "idle", "window_title", "duration_seconds"]],
+            rows,
+        )
 
     def test_all_exports_full_segments_and_invalid_ranges_are_rejected(self) -> None:
         with urlopen(f"{self.base_url}/api/export?all=1", timeout=2) as response:
             rows = list(csv.DictReader(io.StringIO(response.read().decode("utf-8"))))
         self.assertEqual(2, len(rows))
+        self.assertEqual(3600, float(rows[0]["duration_seconds"]))
         self.assertEqual(600, float(rows[1]["duration_seconds"]))
 
         for query in ("start=bad&end=2026-01-01", "start=2026-01-02&end=2026-01-01"):
             with self.subTest(query=query), self.assertRaises(HTTPError) as error:
                 urlopen(f"{self.base_url}/api/export?{query}", timeout=2)
-            self.assertEqual(400, error.exception.code)
+            with error.exception as response:
+                self.assertEqual(400, response.code)
+
+    def test_unsupported_date_bounds_return_json_error(self) -> None:
+        for query in (
+            "start=2026-01-01&end=9999-12-31",
+            "start=0001-01-01&end=2026-01-01",
+        ):
+            with self.subTest(query=query):
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(f"{self.base_url}/api/export?{query}", timeout=2)
+                with error.exception as response:
+                    self.assertEqual(400, response.code)
+                    self.assertEqual(
+                        "application/json; charset=utf-8",
+                        response.headers["Content-Type"],
+                    )
+                    self.assertTrue(json.load(response)["error"])
 
 
 if __name__ == "__main__":

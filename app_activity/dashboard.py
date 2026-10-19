@@ -77,7 +77,7 @@ function timeAxis(dataMax,capacity){const steps=[1,2,5,10,15,30,60,120,300,600,9
 function fixedTimeAxis(capacity,intervals){const step=capacity/intervals;return{max:capacity,ticks:Array.from({length:intervals+1},(_,i)=>capacity-i*step)}}
 function renderChart(d){const buckets=chartBuckets(d),dataMax=Math.max(...buckets.map(x=>x.seconds),1),capacity=Math.max(...buckets.map(x=>x.capacity_seconds),1),fixedIntervals=d.period==="hour"?5:d.period==="day"?4:0,axis=chartMode==="percent"?{max:100,ticks:[100,75,50,25,0]}:fixedIntervals?fixedTimeAxis(capacity,fixedIntervals):timeAxis(dataMax,capacity);timeline.style.setProperty("--grid-step",`${100/(axis.ticks.length-1)}%`);yAxis.innerHTML=axis.ticks.map(value=>`<span>${chartMode==="percent"?`${value}%`:fmt(value)}</span>`).join("");timeline.innerHTML=buckets.map((x,i)=>{const total=x.total_seconds??x.seconds,segments=x.apps.map(a=>{const share=a.seconds/Math.max(x.seconds,1)*100,percent=a.seconds/Math.max(total,1)*100;const tip=chartMode==="percent"?`${a.name}: ${percent.toFixed(1)}%`:`${a.name}: ${fmt(a.seconds)}`;return `<div class="bar-segment" title="${escapeHtml(tip)}" style="height:${share}%;background:${colors.get(a.name)||palette[0]}"></div>`}).join("");const height=chartMode==="percent"?(total?x.seconds/total*100:1):Math.max(1,x.seconds/axis.max*100);const totalTip=chartMode==="percent"?`${x.label}: application share`:`${x.label}: ${fmt(x.seconds)}`;return `<div class="bar-wrap" title="${escapeHtml(totalTip)}"><div class="bar-stack" style="height:${height}%">${segments}</div><div class="bar-label">${selected==="month"&&i%3?"":x.label}</div></div>`}).join("")}
 function updateAppTooltips(){document.querySelectorAll(".app-name[data-app-index]").forEach(label=>{const app=currentData?.apps[Number(label.dataset.appIndex)];label.title=app&&label.scrollWidth>label.clientWidth?app.name:""})}
-async function load(){const r=await fetch(`/api/report?period=${selected}&offset=${periodOffset}`),d=await r.json();label.textContent=d.label;nextPeriod.disabled=periodOffset>=0;currentPeriod.disabled=periodOffset===0;const rangeKey=`${d.start}|${d.end}`;if(exportStart.dataset.rangeKey!==rangeKey){const dateValue=value=>{const date=new Date(value);return`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`};exportStart.value=dateValue(d.start);exportEnd.value=dateValue(new Date(new Date(d.end).getTime()-1));exportStart.dataset.rangeKey=rangeKey}active.textContent=fmt(d.active_seconds);idle.textContent=fmt(d.idle_seconds);tracked.textContent=fmt(d.tracked_seconds);
+async function load(){const r=await fetch(`/api/report?period=${selected}&offset=${periodOffset}`),d=await r.json();label.textContent=d.label;nextPeriod.disabled=periodOffset>=0;currentPeriod.disabled=periodOffset===0;const rangeKey=`${d.start}|${d.end}`;if(exportStart.dataset.rangeKey!==rangeKey){const end=new Date(`${d.end.slice(0,19)}Z`);end.setUTCMilliseconds(-1);exportStart.value=d.start.slice(0,10);exportEnd.value=end.toISOString().slice(0,10);exportStart.dataset.rangeKey=rangeKey}active.textContent=fmt(d.active_seconds);idle.textContent=fmt(d.idle_seconds);tracked.textContent=fmt(d.tracked_seconds);
  currentData=d;colors=new Map(d.apps.map((x,i)=>[x.name,palette[i%palette.length]]));renderChart(d);
  apps.innerHTML=d.apps.length?d.apps.map((x,i)=>{const head=`<button class="app-select" type="button" data-app-index="${i}" aria-pressed="${x.name===selectedApplication}" aria-controls="timeline" aria-describedby="applicationHelp"><span class="app-head"><span class="app-name" data-app-index="${i}"><span class="color-dot" style="background:${colors.get(x.name)}"></span> ${escapeHtml(x.name)}</span><span class="app-time">${fmt(x.seconds)} · ${x.percent}%</span></span><span class="track" style="display:block"><span class="fill" style="display:block;width:${x.percent}%;background:${colors.get(x.name)}"></span></span></button>`;if(!x.windows.length)return `<div class="app">${head}</div>`;const windows=x.windows.slice(0,20).map(w=>{const title=escapeHtml(w.title);return `<div class="window"><details class="window-detail"><summary title="${title}">${title}</summary><div class="window-full">${title}</div></details><span class="window-time">${fmt(w.seconds)} · ${w.percent}%</span></div>`}).join("");return `<div class="app">${head}<details class="app-details"><summary>${x.windows.length} window title${x.windows.length===1?"":"s"}</summary><div class="windows">${windows}</div></details></div>`}).join(""):`<div class="empty">No activity recorded yet.</div>`;updateApplicationSelection();requestAnimationFrame(updateAppTooltips)}
 function escapeHtml(v){const e=document.createElement("div");e.textContent=v;return e.innerHTML}
@@ -112,7 +112,7 @@ def create_server(database: ActivityDatabase, port: int) -> ThreadingHTTPServer:
                 parameters = parse_qs(parsed.query)
                 try:
                     if parameters.get("all") == ["1"]:
-                        start = end = None
+                        start_ts = end_ts = None
                     else:
                         start_date = date.fromisoformat(
                             parameters.get("start", [""])[0]
@@ -122,10 +122,15 @@ def create_server(database: ActivityDatabase, port: int) -> ThreadingHTTPServer:
                         )
                         if end_date < start_date:
                             raise ValueError("End date must not be before start date")
-                        start = datetime.combine(start_date, time.min).astimezone()
-                        end = datetime.combine(
-                            end_date + timedelta(days=1), time.min
-                        ).astimezone()
+                        try:
+                            start = datetime.combine(start_date, time.min).astimezone()
+                            end = datetime.combine(
+                                end_date + timedelta(days=1), time.min
+                            ).astimezone()
+                            start_ts = start.timestamp()
+                            end_ts = end.timestamp()
+                        except OSError as error:
+                            raise ValueError(f"Unsupported date bounds: {error}") from error
                     output = io.StringIO(newline="")
                     writer = csv.writer(output)
                     writer.writerow([
@@ -137,10 +142,7 @@ def create_server(database: ActivityDatabase, port: int) -> ThreadingHTTPServer:
                         "duration_seconds",
                     ])
                     for segment_start, segment_end, app_name, idle, title in (
-                        database.export_rows(
-                            start.timestamp() if start else None,
-                            end.timestamp() if end else None,
-                        )
+                        database.export_rows(start_ts, end_ts)
                     ):
                         writer.writerow(
                             [
@@ -156,7 +158,7 @@ def create_server(database: ActivityDatabase, port: int) -> ThreadingHTTPServer:
                                 round(segment_end - segment_start, 3),
                             ]
                         )
-                except (TypeError, ValueError) as error:
+                except (TypeError, ValueError, OverflowError) as error:
                     self._json(400, {"error": str(error)})
                 else:
                     self._send(
@@ -173,6 +175,12 @@ def create_server(database: ActivityDatabase, port: int) -> ThreadingHTTPServer:
                 self._json(200, updates.status())
                 return
             self._json(404, {"error": "Not found"})
+
+        def finish(self) -> None:
+            try:
+                super().finish()
+            finally:
+                database.close()
 
         def log_message(self, format: str, *args: object) -> None:
             return
