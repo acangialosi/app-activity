@@ -68,11 +68,20 @@ class SettingsParser(HTMLParser):
         self.in_settings = False
         self.controls: dict[str, tuple[str, dict[str, str | None]]] = {}
         self.sections: list[str | None] = []
+        self.export_forms: list[dict[str, str | None]] = []
+        self.export_section = False
+        self.in_export_form = False
+        self.export_controls: list[tuple[str, dict[str, str | None]]] = []
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
     ) -> None:
         attributes = dict(attrs)
+        if tag == "form":
+            self.export_forms.append(attributes)
+            self.in_export_form = self.in_settings and self.export_section
+        if self.in_export_form:
+            self.export_controls.append((tag, attributes))
         if tag == "details" and attributes.get("id") == "settings":
             self.in_settings = True
         if self.in_settings:
@@ -80,10 +89,15 @@ class SettingsParser(HTMLParser):
                 self.controls[attributes["id"]] = (tag, attributes)
             if tag == "section":
                 self.sections.append(attributes.get("aria-labelledby"))
+                self.export_section = attributes.get("aria-labelledby") == "exportHeading"
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "details":
             self.in_settings = False
+        if tag == "section":
+            self.export_section = False
+        if tag == "form":
+            self.in_export_form = False
 
 
 class DashboardTests(unittest.TestCase):
@@ -99,7 +113,8 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn("role", trigger)
         self.assertNotIn("tabindex", trigger)
         self.assertEqual(
-            parser.sections, ["appearanceHeading", "updatesHeading", "feedbackHeading"]
+            parser.sections,
+            ["appearanceHeading", "exportHeading", "updatesHeading", "feedbackHeading"],
         )
         for control, tag in (
             ("themeSelect", "select"),
@@ -155,7 +170,8 @@ class DashboardTests(unittest.TestCase):
     def test_desktop_layout_scales_to_viewport_with_720_pixel_minimum(self) -> None:
         self.assertIn("@media(min-width:751px)", HTML)
         self.assertIn("height:max(720px,100dvh)", HTML)
-        self.assertIn("grid-template-rows:auto auto auto auto minmax(0,1fr);", HTML)
+        self.assertIn("grid-template-rows:auto auto auto minmax(0,1fr);", HTML)
+        self.assertNotIn("grid-template-rows:auto auto auto auto", HTML)
         self.assertIn('class="card applications-card"', HTML)
         self.assertIn("#apps{flex:1;min-height:0;overflow-y:auto", HTML)
         self.assertIn("scrollbar-gutter:stable", HTML)
@@ -199,10 +215,37 @@ class DashboardTests(unittest.TestCase):
         )
 
     def test_csv_export_has_date_range_and_all_history_controls(self) -> None:
+        parser = SettingsParser()
+        parser.feed(HTML)
+        self.assertEqual(parser.export_forms, [{
+            "class": "export-controls", "id": "exportForm",
+            "action": "/api/export", "method": "get",
+        }])
+        self.assertEqual(parser.controls["exportHeading"][0], "h2")
+        self.assertIn('<h2 id="exportHeading">Export</h2>', HTML)
+        self.assertEqual(parser.export_controls, [
+            ("form", parser.export_forms[0]),
+            ("label", {}),
+            ("input", {"id": "exportStart", "name": "start", "type": "date", "required": None}),
+            ("label", {}),
+            ("input", {"id": "exportEnd", "name": "end", "type": "date", "required": None}),
+            ("button", {"type": "submit"}),
+            ("a", {"href": "/api/export?all=1"}),
+        ])
+        self.assertIn("<label>From<input", HTML)
+        self.assertIn("<label>To<input", HTML)
+        self.assertIn('<button type="submit">Export CSV</button>', HTML)
+        self.assertIn('<nav id="periods"></nav>\n<section class="metrics">', HTML)
         self.assertIn('action="/api/export" method="get"', HTML)
         self.assertIn('id="exportStart" name="start" type="date" required', HTML)
         self.assertIn('id="exportEnd" name="end" type="date" required', HTML)
         self.assertIn('href="/api/export?all=1">Export all</a>', HTML)
+
+    def test_export_dates_can_shrink_and_wrap_inside_settings(self) -> None:
+        self.assertIn(".export-controls{display:flex;align-items:end;gap:10px;flex-wrap:wrap}", HTML)
+        self.assertIn(".export-controls label{display:grid;flex:1 1 130px;min-width:0;", HTML)
+        self.assertIn(".export-controls input{width:100%;min-width:0;", HTML)
+        self.assertNotIn("margin:-12px 0 18px", HTML)
 
     def test_chart_has_mode_aware_y_axis(self) -> None:
         self.assertIn('class="y-axis" id="yAxis"', HTML)
