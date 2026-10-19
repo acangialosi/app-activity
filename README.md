@@ -56,8 +56,11 @@ The hour view shows five-minute buckets, with window-title details alongside.
 - On desktop, the dashboard fits the browser height down to 720 pixels, with
   the application list scrolling within its panel. Shorter windows scroll the
   page; narrow screens retain the stacked layout.
-- The dashboard supports light and dark themes or can follow the Windows theme.
-  The selected preference is saved in the browser.
+- Open **Settings** in the dashboard header for **Appearance** and **Updates**.
+  Choose a light or dark theme, or follow the Windows theme; the preference is
+  saved in the browser. Settings works with keyboard Enter/Space and Tab;
+  Escape closes it and returns focus to Settings. Clicking or tabbing outside
+  also closes it. On narrow screens, the sections expand inline.
 - Previous and next controls navigate by the selected hour, day, week, month,
   or year period without mixing data between reporting windows. **Now** returns
   any selected view to its current period. The hour view uses five-minute
@@ -73,8 +76,9 @@ The hour view shows five-minute buckets, with window-title details alongside.
   running. Click it to open the usage report; right-click it to open or exit.
 - Packaged builds check GitHub for updates while the dashboard is open.
   Successful checks are cached for an hour; failed checks retry after five
-  minutes. A highlighted notice links to the release when a newer build is
-  available; **View releases** is always available. Checks send no activity data,
+  minutes. An **Update available** badge stays visible on Settings even when
+  collapsed; open **Updates** for the release link and **Check now**.
+  **View releases** remains available there when no update is detected. Checks send no activity data,
   require no account or extra service, and do not interrupt tracking when offline.
   GitHub receives the usual download request metadata, including your IP address.
 
@@ -136,7 +140,7 @@ creating a release. Every push and pull request must pass the test suite before
 the installer is built, and publishing occurs only after both jobs succeed.
 
 Updates are downloaded and installed manually; the app never downloads or runs
-an installer automatically. Select **Check now** beside the dashboard's update
+an installer automatically. Open **Settings → Updates** and select **Check now** beside the update
 status to check immediately, without waiting for the cached result to expire.
 The button is disabled while checking and for builds without update metadata.
 Nightly installations follow the rolling `nightly`

@@ -16,13 +16,18 @@ function element(id) {
             value: "",
             className: "",
             disabled: false,
+            open: false,
+            hidden: id === "settingsUpdate",
             dataset: {},
             options: [],
+            listeners: {},
+            addEventListener(name, callback) {this.listeners[name] = callback;},
             style: {setProperty() {}},
             appendChild(child) {this.options.push(child);},
             add(option) {this.options.push(option);},
             replaceChildren(...children) {this.options = children;},
             contains: () => true,
+            focus() {context.document.activeElement = this;},
         });
     }
     return elements.get(id);
@@ -64,6 +69,9 @@ const updateRequests = [];
 let holdUpdate;
 let retryUpdate;
 let refresh;
+const documentListeners = {};
+const savedPreferences = new Map([["appActivityTheme", "dark"]]);
+let storageUnavailable = false;
 const context = vm.createContext({
     ...Object.fromEntries([
         "showAllApplications", "filterStatus", "timeline", "yAxis", "timeMode", "percentMode",
@@ -73,6 +81,7 @@ const context = vm.createContext({
     ].map(id => [id, element(id)])),
     document: {
         documentElement: {dataset: {}},
+        addEventListener: (name, callback) => {documentListeners[name] = callback;},
         getElementById: element,
         querySelectorAll: () => [],
         createElement: () => ({
@@ -84,7 +93,16 @@ const context = vm.createContext({
             },
         }),
     },
-    localStorage: {getItem: () => null, setItem() {}},
+    localStorage: {
+        getItem(key) {
+            if (storageUnavailable) throw new Error("Storage unavailable");
+            return savedPreferences.get(key) ?? null;
+        },
+        setItem(key, value) {
+            if (storageUnavailable) throw new Error("Storage unavailable");
+            savedPreferences.set(key, value);
+        },
+    },
     addEventListener() {},
     requestAnimationFrame: callback => callback(),
     setInterval: callback => {refresh = callback;},
@@ -112,8 +130,60 @@ const choose = name => {
 };
 
 async function test() {
+    run(scripts[0]);
+    assert.equal(context.document.documentElement.dataset.theme, "dark");
     run(scripts.at(-1));
     await run("load()");
+    assert.equal(element("themeSelect").value, "dark");
+    for (const theme of ["light", "dark", "system"]) {
+        element("themeSelect").value = theme;
+        element("themeSelect").onchange();
+        assert.equal(context.document.documentElement.dataset.theme, theme === "system" ? undefined : theme);
+        assert.equal(savedPreferences.get("appActivityTheme"), theme);
+        assert.equal(run("storedTheme()"), theme);
+    }
+    savedPreferences.set("appActivityTheme", "unknown");
+    assert.equal(run("storedTheme()"), "system");
+    storageUnavailable = true;
+    assert.equal(run("storedTheme()"), "system");
+    run('setTheme("dark")');
+    assert.equal(context.document.documentElement.dataset.theme, "dark");
+    storageUnavailable = false;
+
+    const settings = element("settings");
+    const summary = element("settingsSummary");
+    const outside = element("previousPeriod");
+    settings.contains = target => [settings, summary, element("themeSelect"), element("checkUpdates")].includes(target);
+    let prevented = false;
+    const escape = {key: "Escape", preventDefault() {prevented = true;}};
+    settings.onkeydown(escape);
+    assert.equal(prevented, false);
+    settings.open = true;
+    settings.onkeydown({key: "Tab"});
+    assert.equal(settings.open, true);
+    settings.onkeydown({...escape, defaultPrevented: true});
+    assert.equal(settings.open, true);
+    element("themeSelect").focus();
+    settings.onkeydown(escape);
+    assert.equal(settings.open, false);
+    assert.equal(prevented, true);
+    assert.equal(context.document.activeElement, summary);
+    settings.open = true;
+    settings.listeners.focusout({relatedTarget: element("themeSelect")});
+    assert.equal(settings.open, true);
+    settings.listeners.focusout({relatedTarget: null});
+    assert.equal(settings.open, true);
+    outside.focus();
+    settings.listeners.focusout({relatedTarget: outside});
+    assert.equal(settings.open, false);
+    assert.equal(context.document.activeElement, outside);
+    settings.open = true;
+    documentListeners.click({target: element("themeSelect")});
+    assert.equal(settings.open, true);
+    documentListeners.click({target: outside});
+    assert.equal(settings.open, false);
+    assert.equal(context.document.activeElement, outside);
+
     assert.equal(element("exportStart").value, "2026-06-01");
     assert.equal(element("exportEnd").value, "2026-06-01");
     element("exportStart").value = "2026-05-01";
@@ -232,6 +302,8 @@ async function test() {
     assert.equal(element("updateLink").textContent, "View releases");
     assert.equal(element("checkUpdates").disabled, false);
     assert.equal(updateRequests.at(-1), "GET");
+    assert.equal(element("settingsUpdate").hidden, true);
+    assert.equal(element("settingsUpdate").textContent, "");
     let releaseUpdate;
     holdUpdate = new Promise(resolve => {releaseUpdate = resolve;});
     updateResponse = {...updateResponse, status: "pending", message: "Checking for updates..."};
@@ -259,26 +331,35 @@ async function test() {
     assert.equal(element("updateMessage").innerHTML, "");
     assert.equal(element("updateLink").textContent, "Download update");
     assert.equal(element("updateLink").href, updateResponse.release_url);
+    assert.equal(settings.open, false);
+    assert.equal(element("settingsUpdate").hidden, false);
+    assert.equal(element("settingsUpdate").textContent, "Update available");
+    assert.equal(context.document.activeElement, outside);
     updateResponse = {...updateResponse, status: "pending", message: "Checking for updates..."};
     await run("loadUpdate()");
     assert.equal(typeof retryUpdate, "function");
     assert.equal(element("checkUpdates").disabled, true);
+    assert.equal(element("settingsUpdate").hidden, false);
     updateResponse = {...updateResponse, status: "error", message: "Could not check for updates"};
     await retryUpdate();
     assert.equal(element("updateStatus").dataset.status, "error");
     assert.equal(element("updateLink").textContent, "View releases");
     assert.equal(element("checkUpdates").disabled, false);
+    assert.equal(element("settingsUpdate").hidden, false);
     await element("checkUpdates").onclick();
     assert.equal(updateRequests.at(-1), "POST");
     updateResponse = {...updateResponse, status: "current", message: "You're up to date."};
     await element("checkUpdates").onclick();
     assert.equal(element("updateStatus").dataset.status, "current");
     assert.equal(element("checkUpdates").disabled, false);
+    assert.equal(element("settingsUpdate").hidden, true);
+    assert.equal(element("settingsUpdate").textContent, "");
     updateResponse = {...updateResponse, status: "source", channel: undefined, message: "Running from source"};
     await run("loadUpdate()");
     assert.equal(element("updateStatus").dataset.status, "source");
     assert.ok(!element("updateMessage").textContent.includes("undefined"));
     assert.equal(element("checkUpdates").disabled, true);
+    assert.equal(element("settingsUpdate").hidden, true);
     updateResponse = {...updateResponse, status: "error", message: "Build information is unavailable"};
     await run("loadUpdate()");
     assert.equal(element("checkUpdates").disabled, true);
