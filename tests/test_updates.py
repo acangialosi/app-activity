@@ -7,7 +7,7 @@ import unittest
 from http.client import IncompleteRead
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from app_activity import updates
 from app_activity.dashboard import create_server
@@ -32,7 +32,9 @@ class UpdateTests(unittest.TestCase):
             patch.object(updates.sys, "frozen", False, create=True),
             patch.object(updates, "urlopen") as download,
         ):
-            status = updates.UpdateChecker().status()
+            checker = updates.UpdateChecker()
+            status = checker.status(force=True)
+            self.assertEqual(checker.status(), status)
         self.assertEqual(status["status"], "source")
         self.assertEqual(status["release_url"], updates.RELEASES_URL)
         download.assert_not_called()
@@ -45,7 +47,9 @@ class UpdateTests(unittest.TestCase):
                 patch.object(updates.Path, "read_text", side_effect=error),
                 patch.object(updates, "urlopen") as download,
             ):
-                status = updates.UpdateChecker().status()
+                checker = updates.UpdateChecker()
+                status = checker.status(force=True)
+                self.assertEqual(checker.status(), status)
                 self.assertEqual(status["status"], "error")
                 self.assertIn("Build information", status["message"])
                 download.assert_not_called()
@@ -155,8 +159,43 @@ class UpdateTests(unittest.TestCase):
             checker.status()
             thread.return_value.start.assert_called_once()
 
+    def test_force_bypasses_cached_results_but_reuses_inflight_check(self) -> None:
+        for cached_status in ("current", "available", "error"):
+            with self.subTest(cached_status=cached_status):
+                checker = self.checker()
+                checker._status.update(status=cached_status, message="Cached result")
+                checker._next_check = 100 + (
+                    updates.RETRY_INTERVAL if cached_status == "error"
+                    else updates.CHECK_INTERVAL
+                )
+                with (
+                    patch.object(updates.threading, "Thread") as thread,
+                    patch.object(updates.time, "monotonic", return_value=100),
+                ):
+                    self.assertEqual(checker.status()["status"], cached_status)
+                    thread.assert_not_called()
+                    status = checker.status(force=True)
+                    self.assertEqual(status["status"], "pending")
+                    self.assertEqual(status["message"], "Checking for updates...")
+                    self.assertEqual(status["channel"], "nightly")
+                    for _ in range(10):
+                        self.assertEqual(checker.status(force=True), status)
+                        self.assertEqual(checker.status(), status)
+                    thread.return_value.start.assert_called_once()
+                    with patch.object(
+                        updates, "urlopen",
+                        return_value=io.BytesIO(json.dumps(metadata()).encode()),
+                    ):
+                        checker._check()
+                    self.assertEqual(checker.status()["status"], "current")
+                    self.assertEqual(checker._next_check, 100 + updates.CHECK_INTERVAL)
+                    checker.status(force=True)
+                    self.assertEqual(thread.return_value.start.call_count, 2)
+
     def test_update_endpoint_does_not_wait_for_github_or_block_reports(self) -> None:
         checker = self.checker()
+        checker._status.update(status="current", message="You're up to date.")
+        checker._next_check = updates.time.monotonic() + updates.CHECK_INTERVAL
         entered, release, finished = threading.Event(), threading.Event(), threading.Event()
 
         def check() -> None:
@@ -169,7 +208,7 @@ class UpdateTests(unittest.TestCase):
         database = Mock()
         database.report.return_value = {"label": "Today"}
         with (
-            patch.object(checker, "_check", side_effect=check),
+            patch.object(checker, "_check", side_effect=check) as background_check,
             patch("app_activity.dashboard.UpdateChecker", return_value=checker),
         ):
             server = create_server(database, 0)
@@ -178,9 +217,16 @@ class UpdateTests(unittest.TestCase):
             try:
                 base = f"http://127.0.0.1:{server.server_port}"
                 with urlopen(f"{base}/api/update", timeout=2) as response:
+                    self.assertEqual(json.load(response)["status"], "current")
+                background_check.assert_not_called()
+                with urlopen(Request(f"{base}/api/update", method="POST"), timeout=2) as response:
                     self.assertEqual(json.load(response)["status"], "pending")
                     self.assertEqual(response.headers["Cache-Control"], "no-store")
                 self.assertTrue(entered.wait(2))
+                for method in ("POST", "GET"):
+                    with urlopen(Request(f"{base}/api/update", method=method), timeout=2) as response:
+                        self.assertEqual(json.load(response)["status"], "pending")
+                background_check.assert_called_once()
                 with urlopen(f"{base}/api/report?period=day", timeout=2) as response:
                     self.assertEqual(json.load(response), {"label": "Today"})
                 with urlopen(f"{base}/api/status", timeout=2) as response:

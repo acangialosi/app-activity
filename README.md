@@ -127,7 +127,10 @@ creating a release. Every push and pull request must pass the test suite before
 the installer is built, and publishing occurs only after both jobs succeed.
 
 Updates are downloaded and installed manually; the app never downloads or runs
-an installer automatically. Nightly installations follow the rolling `nightly`
+an installer automatically. Select **Check now** beside the dashboard's update
+status to check immediately, without waiting for the cached result to expire.
+The button is disabled while checking and for builds without update metadata.
+Nightly installations follow the rolling `nightly`
 release, and tagged builds follow GitHub's latest stable release. Each installer
 bundles a build timestamp, also published as `AppActivity-update.json`, so nightly
 updates are detected even without a version-number change. Older or identical

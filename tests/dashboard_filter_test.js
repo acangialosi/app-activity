@@ -60,6 +60,8 @@ let updateResponse = {
 };
 let updateFailure = false;
 let updateHttpOk = true;
+const updateRequests = [];
+let holdUpdate;
 let retryUpdate;
 let refresh;
 const context = vm.createContext({
@@ -86,9 +88,12 @@ const context = vm.createContext({
     addEventListener() {},
     requestAnimationFrame: callback => callback(),
     setInterval: callback => {refresh = callback;},
-    setTimeout: callback => {retryUpdate = callback;},
-    fetch: async url => {
+    setTimeout: callback => {retryUpdate = callback; return callback;},
+    clearTimeout: timer => {if (retryUpdate === timer) retryUpdate = undefined;},
+    fetch: async (url, options) => {
         if (url === "/api/update") {
+            updateRequests.push(options.method);
+            if (holdUpdate) await holdUpdate;
             if (updateFailure) throw new Error("Offline");
             return {ok: updateHttpOk, json: async () => updateResponse};
         }
@@ -225,8 +230,30 @@ async function test() {
     assert.equal(element("updateStatus").dataset.status, "current");
     assert.ok(element("updateMessage").textContent.includes("You're up to date."));
     assert.equal(element("updateLink").textContent, "View releases");
-    updateResponse = {...updateResponse, status: "available", message: "Update available: <new build>"};
+    assert.equal(element("checkUpdates").disabled, false);
+    assert.equal(updateRequests.at(-1), "GET");
+    let releaseUpdate;
+    holdUpdate = new Promise(resolve => {releaseUpdate = resolve;});
+    updateResponse = {...updateResponse, status: "pending", message: "Checking for updates..."};
+    const requestCount = updateRequests.length;
+    const manualCheck = element("checkUpdates").onclick();
+    assert.equal(element("checkUpdates").disabled, true);
+    assert.equal(element("updateMessage").textContent, "Checking for updates...");
+    assert.equal(element("updateStatus").dataset.status, "pending");
+    assert.equal(updateRequests.at(-1), "POST");
+    await element("checkUpdates").onclick();
     await run("loadUpdate()");
+    assert.equal(updateRequests.length, requestCount + 1);
+    releaseUpdate();
+    await manualCheck;
+    holdUpdate = undefined;
+    assert.equal(element("checkUpdates").disabled, true);
+    assert.equal(typeof retryUpdate, "function");
+    updateResponse = {...updateResponse, status: "available", message: "Update available: <new build>"};
+    await retryUpdate();
+    assert.equal(updateRequests.at(-1), "GET");
+    assert.equal(retryUpdate, undefined);
+    assert.equal(element("checkUpdates").disabled, false);
     assert.equal(element("updateStatus").dataset.status, "available");
     assert.ok(element("updateMessage").textContent.includes("<new build>"));
     assert.equal(element("updateMessage").innerHTML, "");
@@ -235,21 +262,35 @@ async function test() {
     updateResponse = {...updateResponse, status: "pending", message: "Checking for updates..."};
     await run("loadUpdate()");
     assert.equal(typeof retryUpdate, "function");
+    assert.equal(element("checkUpdates").disabled, true);
     updateResponse = {...updateResponse, status: "error", message: "Could not check for updates"};
     await retryUpdate();
     assert.equal(element("updateStatus").dataset.status, "error");
     assert.equal(element("updateLink").textContent, "View releases");
+    assert.equal(element("checkUpdates").disabled, false);
+    await element("checkUpdates").onclick();
+    assert.equal(updateRequests.at(-1), "POST");
+    updateResponse = {...updateResponse, status: "current", message: "You're up to date."};
+    await element("checkUpdates").onclick();
+    assert.equal(element("updateStatus").dataset.status, "current");
+    assert.equal(element("checkUpdates").disabled, false);
     updateResponse = {...updateResponse, status: "source", channel: undefined, message: "Running from source"};
     await run("loadUpdate()");
     assert.equal(element("updateStatus").dataset.status, "source");
     assert.ok(!element("updateMessage").textContent.includes("undefined"));
-    updateHttpOk = false;
+    assert.equal(element("checkUpdates").disabled, true);
+    updateResponse = {...updateResponse, status: "error", message: "Build information is unavailable"};
     await run("loadUpdate()");
+    assert.equal(element("checkUpdates").disabled, true);
+    updateHttpOk = false;
+    await element("checkUpdates").onclick();
     assert.equal(element("updateStatus").dataset.status, "error");
     assert.ok(element("updateMessage").textContent.includes("Check GitHub releases manually"));
+    assert.equal(element("checkUpdates").disabled, false);
     updateFailure = true;
     await run("loadUpdate()");
     assert.equal(element("updateStatus").dataset.status, "error");
     assert.equal(element("updateLink").href, updateResponse.release_url);
+    assert.equal(element("checkUpdates").disabled, false);
 }
 test().catch(error => {console.error(error); process.exitCode = 1;});
