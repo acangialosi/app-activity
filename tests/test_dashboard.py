@@ -183,7 +183,8 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn("applicationSelect", HTML)
         self.assertIn('class="app-select" type="button"', HTML)
         self.assertIn('aria-controls="timeline"', HTML)
-        self.assertIn('aria-pressed="${x.name===selectedApplication}"', HTML)
+        self.assertIn('aria-pressed="${selectedApplications.has(x.name)}"', HTML)
+        self.assertIn("Ctrl+click adds or removes applications.", HTML)
         self.assertIn('id="showAllApplications"', HTML)
         self.assertIn('<details class="app-details"><summary>', HTML)
 

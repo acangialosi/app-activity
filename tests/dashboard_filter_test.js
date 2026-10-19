@@ -8,10 +8,23 @@ assert.ok(
     "Expected dashboard scripts extracted by the HTML parser",
 );
 const elements = new Map();
+let appButtons = [];
 function element(id) {
     if (!elements.has(id)) {
         elements.set(id, {
-            innerHTML: "",
+            _html: "",
+            get innerHTML() {return this._html;},
+            set innerHTML(value) {
+                this._html = value;
+                if (id === "apps") {
+                    appButtons = [...value.matchAll(/data-app-index="(\d+)" aria-pressed="(true|false)"/g)]
+                        .map(([, index, pressed]) => ({
+                            dataset: {appIndex: index},
+                            attributes: {"aria-pressed": pressed},
+                            setAttribute(name, value) {this.attributes[name] = value;},
+                        }));
+                }
+            },
             textContent: "",
             value: "",
             className: "",
@@ -83,7 +96,7 @@ const context = vm.createContext({
         documentElement: {dataset: {}},
         addEventListener: (name, callback) => {documentListeners[name] = callback;},
         getElementById: element,
-        querySelectorAll: () => [],
+        querySelectorAll: selector => selector === ".app-select" ? appButtons : [],
         createElement: () => ({
             textContent: "",
             get innerHTML() {
@@ -119,15 +132,23 @@ const context = vm.createContext({
     },
 });
 const run = code => vm.runInContext(code, context);
-const choose = name => {
+const choose = (name, ctrlKey = false) => {
     if (!name) {
         element("showAllApplications").onclick();
         return;
     }
     const index = response.apps.findIndex(app => app.name === name);
     assert.notEqual(index, -1);
-    element("apps").onclick({target: {closest: () => ({dataset: {appIndex: index}})}});
+    element("apps").onclick({ctrlKey, target: {closest: () => appButtons[index]}});
 };
+const selection = () => Array.from(run("[...selectedApplications]"));
+function assertPressed(names) {
+    assert.equal(appButtons.length, response.apps.length);
+    for (const button of appButtons) {
+        assert.equal(button.attributes["aria-pressed"],
+            String(names.includes(response.apps[Number(button.dataset.appIndex)].name)));
+    }
+}
 
 async function test() {
     run(scripts[0]);
@@ -243,7 +264,7 @@ async function test() {
     assert.equal(element("showAllApplications").disabled, true);
     choose("Browser");
     element("apps").onclick({target: {closest: () => null}});
-    assert.equal(run("selectedApplication"), "Browser");
+    assert.deepEqual(selection(), ["Browser"]);
 
     element("percentMode").onclick();
     chart = element("timeline").innerHTML;
@@ -260,9 +281,106 @@ async function test() {
     element("timeMode").onclick();
     assert.equal(element("timeline").innerHTML, allChart);
 
+    choose("Editor", true);
+    assert.deepEqual(selection(), ["Editor"]);
+    assertPressed(["Editor"]);
+    choose("Browser", true);
+    assert.deepEqual(selection(), ["Editor", "Browser"]);
+    assertPressed(["Editor", "Browser"]);
+    assert.equal(element("filterStatus").textContent, "Chart: Editor, Browser");
+    assert.equal(element("showAllApplications").disabled, false);
+    assert.equal(run("chartBuckets(currentData)[0].seconds"), 120);
+    assert.equal(run("chartBuckets(currentData)[0].apps.length"), 2);
+    assert.equal(JSON.stringify(report), original);
+    choose("Editor", true);
+    assert.deepEqual(selection(), ["Browser"]);
+    assertPressed(["Browser"]);
+    choose("Browser", true);
+    assert.deepEqual(selection(), []);
+    assertPressed([]);
+    assert.equal(element("showAllApplications").disabled, true);
+    assert.equal(element("timeline").innerHTML, allChart);
+
+    choose("Editor", true);
+    choose("Browser", true);
+    choose("Browser");
+    assert.deepEqual(selection(), ["Browser"], "Normal click from a subset selects only clicked app");
+    choose("Editor", true);
+    choose("Other 0");
+    assert.deepEqual(selection(), ["Other 0"], "Normal click can replace the subset with an unselected app");
+    choose("Editor", true);
+    choose("");
+    assert.deepEqual(selection(), []);
+    assertPressed([]);
+    assert.equal(element("timeline").innerHTML, allChart);
+
+    const third = {name: "Third", seconds: 120, percent: 50, windows: []};
+    response = {...report, active_seconds: 240, tracked_seconds: 300,
+        apps: [...report.apps, third], timeline: [
+            {...report.timeline[0], seconds: 240, apps: [...report.timeline[0].apps, third]},
+            report.timeline[1],
+        ]};
+    await run("load()");
+    const threeAppsOriginal = JSON.stringify(response);
+    choose("Editor", true);
+    choose("Browser", true);
+    element("percentMode").onclick();
+    chart = element("timeline").innerHTML;
+    assert.ok(chart.includes('title="Editor: 37.5%" style="height:75%;'));
+    assert.ok(chart.includes('title="Browser: 12.5%" style="height:25%;'));
+    assert.ok(chart.includes('class="bar-stack" style="height:50%"'));
+    assert.ok(!chart.includes('title="Third:'));
+    assert.equal(run("chartBuckets(currentData)[0].seconds"), 120);
+    assert.equal(run("chartBuckets(currentData)[0].total_seconds"), 240);
+    assert.equal(element("active").textContent, "4m");
+    assert.equal(JSON.stringify(response), threeAppsOriginal);
+    const stableColors = run("JSON.stringify([...colors])");
+    response = {...response, apps: [...response.apps].reverse()};
+    await refresh();
+    assert.deepEqual(selection(), ["Editor", "Browser"]);
+    assertPressed(["Editor", "Browser"]);
+    assert.equal(run("JSON.stringify([...colors])"), stableColors);
+    assert.equal(element("timeline").innerHTML, chart);
+    choose("Browser", true);
+    assert.deepEqual(selection(), ["Editor"], "Delegated row click uses the refreshed name, not old index");
+    choose("Browser", true);
+
+    response = {...report, period: "week", apps: [report.apps[0]], timeline: [
+        {...report.timeline[0], seconds: 90, apps: [{name: "Editor", seconds: 90}]},
+    ]};
+    element("previousPeriod").onclick();
+    await run("load()");
+    assert.deepEqual(selection(), ["Editor", "Browser"]);
+    assertPressed(["Editor"]);
+    assert.equal(element("filterStatus").textContent, "Chart: Editor, Browser (no activity)");
+    assert.ok(element("timeline").innerHTML.includes("Editor: 100.0%"));
+    response = {...response, apps: [], timeline: [{...report.timeline[1]}]};
+    await refresh();
+    assert.deepEqual(selection(), ["Editor", "Browser"]);
+    assert.equal(element("filterStatus").textContent, "Chart: Editor (no activity), Browser (no activity)");
+    assert.equal(element("showAllApplications").disabled, false);
+    assert.ok(!element("timeline").innerHTML.includes("bar-segment"));
+    response = report;
+    element("currentPeriod").onclick();
+    await run("load()");
+    assert.deepEqual(selection(), ["Editor", "Browser"]);
+    assertPressed(["Editor", "Browser"]);
+    assert.ok(element("timeline").innerHTML.includes("Browser: 25.0%"));
+    assert.equal(run("colors.get('Editor')"), editorColor);
+    choose("");
+    choose('<App & "name">', true);
+    choose("Editor", true);
+    assert.equal(element("filterStatus").textContent, 'Chart: <App & "name">, Editor');
+    assert.equal(element("filterStatus").innerHTML, "");
+    assertPressed(['<App & "name">', "Editor"]);
+    element("apps").onclick({ctrlKey: true, target: {closest: () => null}});
+    assert.deepEqual(selection(), ['<App & "name">', "Editor"], "Window detail clicks leave the selection unchanged");
+    choose("");
+    element("timeMode").onclick();
+
     choose("Browser");
     await refresh();
-    assert.equal(run("selectedApplication"), "Browser");
+    assert.deepEqual(selection(), ["Browser"]);
     assert.ok(!element("timeline").innerHTML.includes("Editor:"));
 
     response = {...report, period: "week", apps: [report.apps[0]], timeline: [
@@ -271,7 +389,7 @@ async function test() {
     ]};
     element("previousPeriod").onclick();
     await run("load()");
-    assert.equal(run("selectedApplication"), "Browser");
+    assert.deepEqual(selection(), ["Browser"]);
     assert.equal(element("filterStatus").textContent, "Chart: Browser (no activity)");
     assert.equal(element("showAllApplications").disabled, false);
     assert.equal((element("timeline").innerHTML.match(/bar-segment/g) || []).length, 0);
@@ -287,7 +405,7 @@ async function test() {
     for (const period of ["hour", "day", "week", "month", "year"]) {
         response = {...report, period};
         await run("load()");
-        assert.equal(run("selectedApplication"), "Browser");
+        assert.deepEqual(selection(), ["Browser"]);
         assert.ok(element("timeline").innerHTML.includes("Browser: 25.0%"));
         element("timeMode").onclick();
         assert.ok(element("timeline").innerHTML.includes("Browser: 30s"));
@@ -298,10 +416,10 @@ async function test() {
         {label: "00", capacity_seconds: 3600, seconds: 0, apps: []},
     ]};
     await run("load()");
-    assert.equal(run("selectedApplication"), "Browser");
+    assert.deepEqual(selection(), ["Browser"]);
     assert.ok(!element("timeline").innerHTML.includes("NaN"));
     choose("");
-    assert.equal(run("selectedApplication"), "");
+    assert.deepEqual(selection(), []);
     assert.ok(element("timeline").innerHTML.includes('class="bar-stack" style="height:1%"'));
 
     await run("loadUpdate()");
