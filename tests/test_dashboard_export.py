@@ -19,9 +19,7 @@ class DashboardExportTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
         self.database = ActivityDatabase(Path(self.temp_dir.name) / "activity.db")
-        start = datetime.now().astimezone().replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        start = datetime(2026, 1, 15)
         self.day = start.date().isoformat()
         self.next_day = (start + timedelta(days=1)).date().isoformat()
         self.database._connection().executemany(
