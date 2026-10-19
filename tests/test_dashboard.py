@@ -93,8 +93,14 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(parser.controls["settings"][0], "details")
         self.assertNotIn("open", parser.controls["settings"][1])
         self.assertEqual(parser.controls["settingsSummary"][0], "summary")
-        self.assertIn('<summary id="settingsSummary">Settings', HTML)
-        self.assertEqual(parser.sections, ["appearanceHeading", "updatesHeading"])
+        trigger = parser.controls["settingsSummary"][1]
+        self.assertEqual(trigger["aria-label"], "Settings")
+        self.assertEqual(trigger["title"], "Settings")
+        self.assertNotIn("role", trigger)
+        self.assertNotIn("tabindex", trigger)
+        self.assertEqual(
+            parser.sections, ["appearanceHeading", "updatesHeading", "feedbackHeading"]
+        )
         for control, tag in (
             ("themeSelect", "select"),
             ("updateMessage", "span"),
@@ -108,8 +114,11 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn('aria-haspopup="menu"', HTML)
         self.assertIn("hidden", parser.controls["settingsUpdate"][1])
         self.assertEqual(parser.controls["settingsUpdate"][1]["role"], "status")
-        summary = HTML.split('<summary id="settingsSummary">', 1)[1].split("</summary>", 1)[0]
+        summary = HTML.split('<summary id="settingsSummary"', 1)[1].split("</summary>", 1)[0]
         self.assertIn('id="settingsUpdate"', summary)
+        self.assertIn('<svg class="settings-icon"', summary)
+        self.assertIn('aria-hidden="true" focusable="false"', summary)
+        self.assertNotIn(">Settings", summary)
         link = parser.controls["updateLink"][1]
         self.assertEqual(link["href"], "https://github.com/acangialosi/app-activity/releases")
         self.assertEqual(link["target"], "_blank")
@@ -146,7 +155,7 @@ class DashboardTests(unittest.TestCase):
     def test_desktop_layout_scales_to_viewport_with_720_pixel_minimum(self) -> None:
         self.assertIn("@media(min-width:751px)", HTML)
         self.assertIn("height:max(720px,100dvh)", HTML)
-        self.assertIn("grid-template-rows:auto auto auto auto minmax(0,1fr) auto;", HTML)
+        self.assertIn("grid-template-rows:auto auto auto auto minmax(0,1fr);", HTML)
         self.assertIn('class="card applications-card"', HTML)
         self.assertIn("#apps{flex:1;min-height:0;overflow-y:auto", HTML)
         self.assertIn("scrollbar-gutter:stable", HTML)

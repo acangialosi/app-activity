@@ -56,7 +56,8 @@ The hour view shows five-minute buckets, with window-title details alongside.
 - On desktop, the dashboard fits the browser height down to 720 pixels, with
   the application list scrolling within its panel. Shorter windows scroll the
   page; narrow screens retain the stacked layout.
-- Open **Settings** in the dashboard header for **Appearance** and **Updates**.
+- Open the **Settings** gear icon in the dashboard header for **Appearance**,
+  **Updates**, and **Feedback**.
   Choose a light or dark theme, or follow the Windows theme; the preference is
   saved in the browser. Settings works with keyboard Enter/Space and Tab;
   Escape closes it and returns focus to Settings. Clicking or tabbing outside
@@ -84,7 +85,8 @@ The hour view shows five-minute buckets, with window-title details alongside.
 
 ## Feedback
 
-Choose **Report a problem** or **Suggest a feature** in the dashboard footer
+Open the **Settings** gear icon in the dashboard header, then choose
+**Report a problem** or **Suggest a feature** under **Feedback**
 to open a prefilled issue for this repository in a new GitHub tab. Sign in to
 GitHub if needed, replace the suggested title, fill in the prompts, and review
 your text before submitting. Nothing is submitted automatically, and no activity
