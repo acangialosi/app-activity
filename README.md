@@ -62,6 +62,8 @@ The hour view shows five-minute buckets, with window-title details alongside.
   or year period without mixing data between reporting windows. **Now** returns
   any selected view to its current period. The hour view uses five-minute
   timeline buckets.
+- Export activity segments to CSV for a chosen date range or all recorded
+  history.
 - The collector samples every five seconds and uses Windows APIs plus SQLite.
 - You are considered idle after five minutes without keyboard or mouse input.
 - The Windows lock screen, sign-in and credential surfaces, Windows desktop,

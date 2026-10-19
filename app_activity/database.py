@@ -331,6 +331,37 @@ class ActivityDatabase:
             ],
         }
 
+    def export_rows(
+        self, start_ts: float | None = None, end_ts: float | None = None
+    ) -> list[tuple[float, float, str, bool, str]]:
+        conditions = ["end_ts > start_ts"]
+        parameters: list[float] = []
+        if start_ts is not None:
+            conditions.append("end_ts > ?")
+            parameters.append(start_ts)
+        if end_ts is not None:
+            conditions.append("start_ts < ?")
+            parameters.append(end_ts)
+        rows = self._connection().execute(
+            f"""
+            SELECT start_ts, end_ts, app_name, is_idle, window_title
+            FROM activity_segments
+            WHERE {" AND ".join(conditions)}
+            ORDER BY start_ts
+            """,
+            parameters,
+        ).fetchall()
+        return [
+            (
+                max(float(start), start_ts) if start_ts is not None else float(start),
+                min(float(end), end_ts) if end_ts is not None else float(end),
+                str(app_name),
+                bool(is_idle),
+                str(window_title),
+            )
+            for start, end, app_name, is_idle, window_title in rows
+        ]
+
 
 def _legacy_detail_key(app_name: str, window_title: str) -> str:
     if uses_title_details(app_name):
