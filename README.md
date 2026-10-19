@@ -78,6 +78,15 @@ The hour view shows five-minute buckets, with window-title details alongside.
   require no account or extra service, and do not interrupt tracking when offline.
   GitHub receives the usual download request metadata, including your IP address.
 
+## Feedback
+
+Choose **Report a problem** or **Suggest a feature** in the dashboard footer
+to open a prefilled issue for this repository in a new GitHub tab. Sign in to
+GitHub if needed, replace the suggested title, fill in the prompts, and review
+your text before submitting. Nothing is submitted automatically, and no activity
+history, window titles, or database contents are attached. Issues are public:
+omit private information from anything you enter or upload.
+
 ## Install
 
 ### Windows installer

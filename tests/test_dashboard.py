@@ -82,7 +82,7 @@ class DashboardTests(unittest.TestCase):
     def test_desktop_layout_scales_to_viewport_with_720_pixel_minimum(self) -> None:
         self.assertIn("@media(min-width:751px)", HTML)
         self.assertIn("height:max(720px,100dvh)", HTML)
-        self.assertIn("grid-template-rows:auto auto auto auto minmax(0,1fr)", HTML)
+        self.assertIn("grid-template-rows:auto auto auto auto minmax(0,1fr) auto;", HTML)
         self.assertIn('class="card applications-card"', HTML)
         self.assertIn("#apps{flex:1;min-height:0;overflow-y:auto", HTML)
         self.assertIn("scrollbar-gutter:stable", HTML)
