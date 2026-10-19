@@ -63,6 +63,15 @@ class ScriptParserTests(unittest.TestCase):
 
 
 class DashboardTests(unittest.TestCase):
+    def test_local_only_tracking_label_is_under_app_title(self) -> None:
+        self.assertEqual(HTML.count("Local-only tracking"), 1)
+        self.assertIn(
+            "<header><div><h1>App Activity</h1>"
+            '<div class="muted">Local-only tracking</div>'
+            '<div class="report-nav">',
+            HTML,
+        )
+
     def test_manual_update_control_is_accessible_and_initially_disabled(self) -> None:
         self.assertIn(
             '<button id="checkUpdates" type="button" '
