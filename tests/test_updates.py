@@ -219,12 +219,18 @@ class UpdateTests(unittest.TestCase):
                 with urlopen(f"{base}/api/update", timeout=2) as response:
                     self.assertEqual(json.load(response)["status"], "current")
                 background_check.assert_not_called()
-                with urlopen(Request(f"{base}/api/update", method="POST"), timeout=2) as response:
+                with urlopen(
+                    Request(f"{base}/api/update", method="POST", headers={"Origin": base}),
+                    timeout=2,
+                ) as response:
                     self.assertEqual(json.load(response)["status"], "pending")
                     self.assertEqual(response.headers["Cache-Control"], "no-store")
                 self.assertTrue(entered.wait(2))
                 for method in ("POST", "GET"):
-                    with urlopen(Request(f"{base}/api/update", method=method), timeout=2) as response:
+                    with urlopen(
+                        Request(f"{base}/api/update", method=method, headers={"Origin": base}),
+                        timeout=2,
+                    ) as response:
                         self.assertEqual(json.load(response)["status"], "pending")
                 background_check.assert_called_once()
                 with urlopen(f"{base}/api/report?period=day", timeout=2) as response:
@@ -237,6 +243,46 @@ class UpdateTests(unittest.TestCase):
                 thread.join(5)
                 server.server_close()
                 self.assertTrue(finished.wait(5))
+
+    def test_forced_update_requires_local_dashboard_origin(self) -> None:
+        checker = Mock()
+        checker.status.return_value = {"status": "pending"}
+        with patch("app_activity.dashboard.UpdateChecker", return_value=checker):
+            server = create_server(Mock(), 0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_port}"
+                for origin in (
+                    None, "null", "https://example.com",
+                    "http://127.0.0.1:1", "http://localhost:1",
+                    f"https://127.0.0.1:{server.server_port}",
+                    f"http://127.0.0.1.evil.example:{server.server_port}",
+                ):
+                    with self.subTest(origin=origin):
+                        headers = {"Host": "example.com"}
+                        if origin is not None:
+                            headers["Origin"] = origin
+                        request = Request(f"{base}/api/update", method="POST", headers=headers)
+                        with self.assertRaises(HTTPError) as error:
+                            urlopen(request, timeout=2)
+                        with error.exception as response:
+                            self.assertEqual(response.code, 403)
+                            self.assertIn("local dashboard origin", json.load(response)["error"])
+                        checker.status.assert_not_called()
+                for origin in (base, f"http://localhost:{server.server_port}"):
+                    with self.subTest(origin=origin):
+                        request = Request(
+                            f"{base}/api/update", method="POST", headers={"Origin": origin}
+                        )
+                        with urlopen(request, timeout=2) as response:
+                            self.assertEqual(json.load(response)["status"], "pending")
+                        checker.status.assert_called_with(force=True)
+                self.assertEqual(checker.status.call_count, 2)
+            finally:
+                server.shutdown()
+                thread.join(5)
+                server.server_close()
 
 
 if __name__ == "__main__":

@@ -104,6 +104,13 @@ def create_server(database: ActivityDatabase, port: int) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
             if urlparse(self.path).path == "/api/update":
+                port = self.server.server_address[1]
+                if self.headers.get("Origin") not in (
+                    f"http://127.0.0.1:{port}",
+                    f"http://localhost:{port}",
+                ):
+                    self._json(403, {"error": "Update checks require a local dashboard origin"})
+                    return
                 self._json(200, updates.status(force=True))
                 return
             self._json(404, {"error": "Not found"})
