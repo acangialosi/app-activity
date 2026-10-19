@@ -81,7 +81,8 @@ function storedTheme(){try{const theme=localStorage.getItem("appActivityTheme");
 function setTheme(theme){if(theme==="light"||theme==="dark")document.documentElement.dataset.theme=theme;else delete document.documentElement.dataset.theme;themeSelect.value=theme;try{localStorage.setItem("appActivityTheme",theme)}catch{}}
 const settings=document.getElementById("settings"),settingsSummary=document.getElementById("settingsSummary");
 settings.onkeydown=event=>{if(event.key==="Escape"&&settings.open&&!event.defaultPrevented){event.preventDefault();settings.open=false;settingsSummary.focus()}};
-settings.addEventListener("focusout",event=>{if(event.relatedTarget&&!settings.contains(event.relatedTarget))settings.open=false});
+// Pointer focus changes must not collapse the inline panel before the outside click.
+document.addEventListener("keyup",event=>{if(event.key==="Tab"&&!settings.contains(document.activeElement))settings.open=false});
 document.addEventListener("click",event=>{if(!settings.contains(event.target))settings.open=false});
 function nav(){periods.forEach(p=>{const b=document.createElement("button");b.textContent=p[0].toUpperCase()+p.slice(1);b.className=p===selected?"active":"";b.onclick=()=>{selected=p;periodOffset=0;document.querySelectorAll("nav button").forEach(x=>x.className="");b.className="active";load()};periodsEl.appendChild(b)})}
 function setChartMode(mode){chartMode=mode;timeMode.className=mode==="time"?"active":"";percentMode.className=mode==="percent"?"active":"";if(currentData)renderChart(currentData)}
