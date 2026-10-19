@@ -62,7 +62,71 @@ class ScriptParserTests(unittest.TestCase):
         self.assertEqual(parser.scripts, [])
 
 
+class SettingsParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_settings = False
+        self.controls: dict[str, tuple[str, dict[str, str | None]]] = {}
+        self.sections: list[str | None] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        attributes = dict(attrs)
+        if tag == "details" and attributes.get("id") == "settings":
+            self.in_settings = True
+        if self.in_settings:
+            if "id" in attributes:
+                self.controls[attributes["id"]] = (tag, attributes)
+            if tag == "section":
+                self.sections.append(attributes.get("aria-labelledby"))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "details":
+            self.in_settings = False
+
+
 class DashboardTests(unittest.TestCase):
+    def test_settings_is_a_labeled_native_disclosure_not_a_menu(self) -> None:
+        parser = SettingsParser()
+        parser.feed(HTML)
+        self.assertEqual(parser.controls["settings"][0], "details")
+        self.assertNotIn("open", parser.controls["settings"][1])
+        self.assertEqual(parser.controls["settingsSummary"][0], "summary")
+        self.assertIn('<summary id="settingsSummary">Settings', HTML)
+        self.assertEqual(parser.sections, ["appearanceHeading", "updatesHeading"])
+        for control, tag in (
+            ("themeSelect", "select"),
+            ("updateMessage", "span"),
+            ("updateLink", "a"),
+            ("checkUpdates", "button"),
+        ):
+            with self.subTest(control=control):
+                self.assertEqual(parser.controls[control][0], tag)
+        self.assertIn('for="themeSelect">Theme', HTML)
+        self.assertNotIn('role="menu', HTML)
+        self.assertNotIn('aria-haspopup="menu"', HTML)
+        self.assertIn("hidden", parser.controls["settingsUpdate"][1])
+        self.assertEqual(parser.controls["settingsUpdate"][1]["role"], "status")
+        summary = HTML.split('<summary id="settingsSummary">', 1)[1].split("</summary>", 1)[0]
+        self.assertIn('id="settingsUpdate"', summary)
+        link = parser.controls["updateLink"][1]
+        self.assertEqual(link["href"], "https://github.com/acangialosi/app-activity/releases")
+        self.assertEqual(link["target"], "_blank")
+        self.assertEqual(set(link["rel"].split()), {"noopener", "noreferrer"})
+
+    def test_settings_panel_overlays_desktop_but_expands_inline_on_mobile(self) -> None:
+        self.assertIn(".settings{position:relative;flex:none;max-width:100%}", HTML)
+        self.assertIn(".settings-panel{position:absolute;right:0;", HTML)
+        self.assertIn("width:min(340px,calc(100vw - 40px))", HTML)
+        self.assertIn("max-height:calc(100dvh - 180px);overflow-y:auto", HTML)
+        mobile_styles = HTML.split("@media(max-width:750px)", 1)[1].split("</style>", 1)[0]
+        self.assertIn(".settings-panel{position:static;width:100%;max-height:none;", mobile_styles)
+        self.assertIn("nav{flex-wrap:wrap}", mobile_styles)
+        self.assertIn(".settings>summary:focus-visible", HTML)
+        self.assertIn(".settings-panel :focus-visible", HTML)
+        self.assertIn(".settings-update:not([hidden]){display:inline-block}", HTML)
+
     def test_local_only_tracking_label_is_under_app_title(self) -> None:
         self.assertEqual(HTML.count("Local-only tracking"), 1)
         self.assertIn(
