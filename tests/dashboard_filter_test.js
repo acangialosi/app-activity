@@ -101,8 +101,7 @@ const context = vm.createContext({
             textContent: "",
             get innerHTML() {
                 return this.textContent.replace(/&/g, "&amp;")
-                    .replace(/</g, "&lt;").replace(/>/g, "&gt;")
-                    .replace(/"/g, "&quot;");
+                    .replace(/</g, "&lt;").replace(/>/g, "&gt;");
             },
         }),
     },
@@ -242,6 +241,8 @@ async function test() {
     assert.equal(element("showAllApplications").disabled, true);
     assert.ok(allApps.includes("Other 15"));
     assert.ok(allApps.includes("&lt;App &amp; &quot;name&quot;&gt;"));
+    assert.equal(run(`escapeHtml('<App & "name">')`), "&lt;App &amp; &quot;name&quot;&gt;",
+        "DOM text serialization alone does not escape quotes used in title attributes");
 
     choose("Browser");
     let chart = element("timeline").innerHTML;
@@ -376,6 +377,48 @@ async function test() {
     element("apps").onclick({ctrlKey: true, target: {closest: () => null}});
     assert.deepEqual(selection(), ['<App & "name">', "Editor"], "Window detail clicks leave the selection unchanged");
     choose("");
+    for (const seconds of [5, 6]) {
+        response = {...report, apps: report.apps.slice(0, 2), timeline: [
+            {...report.timeline[0], seconds: 11, apps: [
+                {name: "Editor", seconds}, {name: "Browser", seconds},
+            ]},
+        ]};
+        await run("load()");
+        const roundedOriginal = JSON.stringify(response);
+        const roundedAll = element("timeline").innerHTML;
+        choose("Editor", true);
+        assert.equal(run("chartBuckets(currentData)[0].seconds"), seconds);
+        assert.equal(run("chartBuckets(currentData)[0].total_seconds"), 11);
+        choose("Browser", true);
+        assert.equal(run("chartBuckets(currentData)[0].seconds"), 11);
+        assert.equal(element("timeline").innerHTML, roundedAll);
+        for (const name of ["Editor", "Browser"]) {
+            assert.ok(roundedAll.includes(`title="${name}: 50.0%" style="height:50%;`));
+        }
+        assert.ok(roundedAll.includes('class="bar-stack" style="height:100%"'));
+        element("timeMode").onclick();
+        assert.ok(element("timeline").innerHTML.includes('title="00: 11s"'));
+        assert.ok(element("timeline").innerHTML.includes(`title="Editor: ${seconds}s"`));
+        assert.equal(JSON.stringify(response), roundedOriginal);
+        element("percentMode").onclick();
+        choose("");
+    }
+    response = {...report, apps: report.apps.slice(0, 3), timeline: [
+        {...report.timeline[0], seconds: 11, apps: [
+            {name: "Editor", seconds: 6}, {name: "Browser", seconds: 6},
+            {name: "Other 0", seconds: 0},
+        ]},
+    ]};
+    await run("load()");
+    choose("Editor", true);
+    choose("Browser", true);
+    assert.equal(run("chartBuckets(currentData)[0].seconds"), 11,
+        "A proper subset cannot exceed the independently rounded original total");
+    assert.ok(element("timeline").innerHTML.includes('class="bar-stack" style="height:100%"'));
+    assert.ok(element("timeline").innerHTML.includes('title="Editor: 50.0%" style="height:50%;'));
+    choose("");
+    response = report;
+    await run("load()");
     element("timeMode").onclick();
 
     choose("Browser");
