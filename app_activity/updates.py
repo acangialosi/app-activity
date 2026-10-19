@@ -73,10 +73,15 @@ class UpdateChecker:
                     message="Checking for updates...",
                 )
 
-    def status(self) -> dict[str, str]:
+    def status(self, *, force: bool = False) -> dict[str, str]:
         with self._lock:
-            if self._current is not None and time.monotonic() >= self._next_check:
+            if (
+                self._current is not None
+                and self._next_check != float("inf")
+                and (force or time.monotonic() >= self._next_check)
+            ):
                 self._next_check = float("inf")
+                self._status.update(status="pending", message="Checking for updates...")
                 threading.Thread(
                     target=self._check, name="release-update-check", daemon=True
                 ).start()

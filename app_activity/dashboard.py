@@ -42,13 +42,13 @@ button.active{background:var(--accent);color:var(--accent-text)}.metrics{display
 .app{margin:14px 0;padding-left:18px;min-width:0;max-width:100%}.app>summary{cursor:pointer;list-style:none;min-width:0;position:relative}.app>summary::-webkit-details-marker{display:none}.app>summary::before{content:"›";position:absolute;left:-17px;top:-2px;color:var(--accent);font-size:21px;line-height:1;transition:transform .15s ease}.app[open]>summary::before{transform:rotate(90deg)}.app-head{display:flex;justify-content:space-between;gap:12px;min-width:0}.app-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.app-time{flex:none}.window-count{display:inline-block;color:var(--muted);font-size:10px;line-height:1;margin-left:6px;padding:2px 5px;border:1px solid var(--border);border-radius:8px;vertical-align:1px}.track{height:7px;background:var(--track);border-radius:9px;margin-top:7px;overflow:hidden}
 .windows{border-left:2px solid var(--border);margin:10px 0 0 7px;padding-left:12px;min-width:0;max-width:100%}.window{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;color:var(--muted);font-size:13px;margin:8px 0;min-width:0;max-width:100%}.window-detail{flex:1;min-width:0;max-width:100%}.window-detail summary{cursor:pointer;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;list-style:none}.window-detail summary::-webkit-details-marker{display:none}.window-full{color:var(--text);margin-top:6px;overflow-wrap:anywhere;white-space:normal}.window-time{flex:none;white-space:nowrap}
 .fill{height:100%;background:var(--accent);border-radius:9px}.empty{color:var(--muted);padding:30px 0;text-align:center}
-.update-status{font-size:12px;color:var(--muted);margin-top:8px;max-width:420px}.update-status a{color:var(--accent);white-space:nowrap}.update-status[data-status="available"]{border-left:3px solid var(--accent);padding-left:8px;color:var(--text)}.header-tools{flex-wrap:wrap}.app-info{min-width:0}
+.update-status{font-size:12px;color:var(--muted);margin-top:8px;max-width:420px}.update-status a{color:var(--accent);white-space:nowrap}.update-status button{font:inherit;margin-left:6px;padding:3px 7px}.update-status button:disabled{opacity:.5;cursor:default}.update-status[data-status="available"]{border-left:3px solid var(--accent);padding-left:8px;color:var(--text)}.header-tools{flex-wrap:wrap}.app-info{min-width:0}
 @media(min-width:751px){main{height:max(720px,100dvh);display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr);padding:24px 20px}.grid{min-height:0}.chart-area{min-height:0}.applications-card{display:flex;flex-direction:column;min-height:0}.applications-card> :not(#apps){flex-shrink:0}#apps{flex:1;min-height:0;overflow-y:auto;scrollbar-gutter:stable;padding:3px}.chart-heading{flex-shrink:0}}
 @media(max-width:750px){header{align-items:start;flex-direction:column}.header-tools{width:100%;justify-content:space-between}.metrics,.grid{grid-template-columns:1fr}.chart-area{min-height:210px}.y-axis{width:48px}}
 </style>
 </head>
 <body><main>
-<header><div><h1>App Activity</h1><div class="report-nav"><button id="previousPeriod" type="button" title="Previous period" aria-label="Previous period">←</button><div id="label">Loading...</div><button id="nextPeriod" type="button" title="Next period" aria-label="Next period">→</button><button id="currentPeriod" class="current-period" type="button" title="Go to current period">Now</button></div></div><div class="header-tools"><div class="app-info"><div class="muted">Local-only tracking</div><div class="update-status" id="updateStatus"><span id="updateMessage" role="status">Checking for updates...</span> <a id="updateLink" href="https://github.com/acangialosi/app-activity/releases" target="_blank" rel="noopener noreferrer">View releases</a></div></div><label class="theme-setting" for="themeSelect">Theme<select id="themeSelect"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div></header>
+<header><div><h1>App Activity</h1><div class="report-nav"><button id="previousPeriod" type="button" title="Previous period" aria-label="Previous period">←</button><div id="label">Loading...</div><button id="nextPeriod" type="button" title="Next period" aria-label="Next period">→</button><button id="currentPeriod" class="current-period" type="button" title="Go to current period">Now</button></div></div><div class="header-tools"><div class="app-info"><div class="muted">Local-only tracking</div><div class="update-status" id="updateStatus"><span id="updateMessage" role="status">Checking for updates...</span> <a id="updateLink" href="https://github.com/acangialosi/app-activity/releases" target="_blank" rel="noopener noreferrer">View releases</a><button id="checkUpdates" type="button" aria-describedby="updateMessage" disabled>Check now</button></div></div><label class="theme-setting" for="themeSelect">Theme<select id="themeSelect"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div></header>
 <nav id="periods"></nav>
 <form class="export-controls" id="exportForm" action="/api/export" method="get"><label>From<input id="exportStart" name="start" type="date" required></label><label>To<input id="exportEnd" name="end" type="date" required></label><button type="submit">Export CSV</button><a href="/api/export?all=1">Export all</a></form>
 <section class="metrics">
@@ -81,7 +81,18 @@ async function load(){const r=await fetch(`/api/report?period=${selected}&offset
  currentData=d;colors=new Map(d.apps.map((x,i)=>[x.name,palette[i%palette.length]]));renderChart(d);
  apps.innerHTML=d.apps.length?d.apps.map((x,i)=>{const head=`<button class="app-select" type="button" data-app-index="${i}" aria-pressed="${x.name===selectedApplication}" aria-controls="timeline" aria-describedby="applicationHelp"><span class="app-head"><span class="app-name" data-app-index="${i}"><span class="color-dot" style="background:${colors.get(x.name)}"></span> ${escapeHtml(x.name)}</span><span class="app-time">${fmt(x.seconds)} · ${x.percent}%</span></span><span class="track" style="display:block"><span class="fill" style="display:block;width:${x.percent}%;background:${colors.get(x.name)}"></span></span></button>`;if(!x.windows.length)return `<div class="app">${head}</div>`;const windows=x.windows.slice(0,20).map(w=>{const title=escapeHtml(w.title);return `<div class="window"><details class="window-detail"><summary title="${title}">${title}</summary><div class="window-full">${title}</div></details><span class="window-time">${fmt(w.seconds)} · ${w.percent}%</span></div>`}).join("");return `<div class="app">${head}<details class="app-details"><summary>${x.windows.length} window title${x.windows.length===1?"":"s"}</summary><div class="windows">${windows}</div></details></div>`}).join(""):`<div class="empty">No activity recorded yet.</div>`;updateApplicationSelection();requestAnimationFrame(updateAppTooltips)}
 function escapeHtml(v){const e=document.createElement("div");e.textContent=v;return e.innerHTML}
-async function loadUpdate(){const status=document.getElementById("updateStatus"),message=document.getElementById("updateMessage"),link=document.getElementById("updateLink");try{const response=await fetch("/api/update");if(!response.ok)throw new Error("Update status unavailable");const data=await response.json();status.dataset.status=data.status;message.textContent=`${data.version}${data.channel?` (${data.channel})`:""} - ${data.message}`;link.href=data.release_url;link.textContent=data.status==="available"?"Download update":"View releases";if(data.status==="pending")setTimeout(loadUpdate,1000)}catch{status.dataset.status="error";message.textContent="Update status unavailable. Check GitHub releases manually."}}
+let updateRequestPending=false,updateRetry;
+async function loadUpdate(force=false){
+ if(updateRequestPending)return;
+ updateRequestPending=true;clearTimeout(updateRetry);
+ const status=document.getElementById("updateStatus"),message=document.getElementById("updateMessage"),link=document.getElementById("updateLink"),button=document.getElementById("checkUpdates");
+ button.disabled=true;
+ if(force){status.dataset.status="pending";message.textContent="Checking for updates..."}
+ try{const response=await fetch("/api/update",{method:force?"POST":"GET"});if(!response.ok)throw new Error("Update status unavailable");const data=await response.json();status.dataset.status=data.status;message.textContent=`${data.version}${data.channel?` (${data.channel})`:""} - ${data.message}`;link.href=data.release_url;link.textContent=data.status==="available"?"Download update":"View releases";button.disabled=data.status==="pending"||!data.channel;if(data.status==="pending")updateRetry=setTimeout(loadUpdate,1000)}
+ catch{status.dataset.status="error";message.textContent="Update status unavailable. Check GitHub releases manually.";button.disabled=false}
+ finally{updateRequestPending=false}
+}
+document.getElementById("checkUpdates").onclick=()=>loadUpdate(true);
 loadUpdate();setInterval(loadUpdate,60000);
 const periodsEl=document.getElementById("periods");previousPeriod.onclick=()=>{periodOffset--;load()};nextPeriod.onclick=()=>{if(periodOffset<0){periodOffset++;load()}};currentPeriod.onclick=()=>{if(periodOffset!==0){periodOffset=0;load()}};timeMode.onclick=()=>setChartMode("time");percentMode.onclick=()=>setChartMode("percent");apps.onclick=event=>{const button=event.target.closest(".app-select");if(button&&apps.contains(button))selectApplication(currentData.apps[Number(button.dataset.appIndex)].name)};showAllApplications.onclick=()=>selectApplication("");themeSelect.onchange=()=>setTheme(themeSelect.value);addEventListener("resize",updateAppTooltips);setTheme(storedTheme());nav();load();setInterval(load,60000);
 </script></body></html>"""
@@ -91,6 +102,19 @@ def create_server(database: ActivityDatabase, port: int) -> ThreadingHTTPServer:
     updates = UpdateChecker()
 
     class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            if urlparse(self.path).path == "/api/update":
+                port = self.server.server_address[1]
+                if self.headers.get("Origin") not in (
+                    f"http://127.0.0.1:{port}",
+                    f"http://localhost:{port}",
+                ):
+                    self._json(403, {"error": "Update checks require a local dashboard origin"})
+                    return
+                self._json(200, updates.status(force=True))
+                return
+            self._json(404, {"error": "Not found"})
+
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path == "/":
