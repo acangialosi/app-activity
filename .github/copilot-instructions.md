@@ -3,8 +3,13 @@
 ## Implementation and acceptance
 
 - For implementation tasks, own delivery from understanding the request through
-  a review-ready pull request. Do not stop at a plan, an initial implementation,
-  or local changes when further delivery work is possible.
+  a merged pull request. An implementation request authorizes this full delivery
+  workflow without a separate user review, approval, or merge prompt, subject to
+  the required checks, reviews, approvals, and repository protections below.
+  Do not stop at a plan, an initial implementation, local changes, or a
+  review-ready pull request when further delivery work is possible.
+- Honor explicit user stopping points, such as a planning checkpoint,
+  draft-only delivery, or a request not to merge.
 - Requests explicitly limited to research, explanation, planning, or review do
   not authorize implementation or a pull request.
 - Establish verifiable acceptance criteria from the requested behavior and
@@ -58,11 +63,19 @@
 - Resolve a review thread only after its finding has been addressed or an
   explanation for rejecting it has been posted.
 - Mark the pull request ready only when the acceptance criteria are verified,
-  required checks pass, and the review-feedback process is complete. Summarize
-  the delivered outcome, validation evidence, and any remaining limitations.
+  required checks pass, and the review-feedback process is complete. Then merge
+  without waiting for a separate user prompt, unless the user requested an
+  earlier stopping point. Required human approvals must still be obtained;
+  agent review does not replace them.
+- Verify the pull request was merged before reporting delivery as complete.
+  Summarize the delivered outcome, validation evidence, and any remaining
+  limitations. For a user-requested earlier stopping point, verify and report
+  that outcome instead.
 - If permissions, unavailable services or reviews, runtime limits, or repeated
   attempts without progress block completion, leave the pull request in draft
   (if one exists) and report the exact blocker and remaining work. Do not claim
   the task is complete or reviewed.
-- Merge only when the user explicitly requests it, all required checks pass,
-  and the review-feedback process above is complete.
+- Merge only when the acceptance criteria are verified, all required checks and
+  approvals are satisfied, and the latest-commit review-feedback process above
+  is complete. Never bypass repository protections or agent platform permission
+  limits to merge; report a blocker if those limits prevent completion.
