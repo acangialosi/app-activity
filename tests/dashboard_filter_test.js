@@ -173,7 +173,8 @@ async function test() {
     const settings = element("settings");
     const summary = element("settingsSummary");
     const outside = element("previousPeriod");
-    settings.contains = target => [settings, summary, element("themeSelect"), element("checkUpdates")].includes(target);
+    settings.contains = target => [settings, summary, element("themeSelect"), element("checkUpdates"),
+        element("exportStart"), element("exportEnd"), element("exportForm")].includes(target);
     let prevented = false;
     const escape = {key: "Escape", preventDefault() {prevented = true;}};
     settings.onkeydown(escape);
@@ -212,11 +213,32 @@ async function test() {
     assert.equal(context.document.activeElement, outside);
     element("currentPeriod").onclick();
 
+    settings.open = true;
+    for (const id of ["exportStart", "exportEnd", "exportForm"]) {
+        element(id).focus();
+        documentListeners.keyup({key: "Tab"});
+        documentListeners.click({target: element(id)});
+        assert.equal(settings.open, true, "Export controls remain inside Settings");
+    }
+    settings.onkeydown({...escape, defaultPrevented: true});
+    assert.equal(settings.open, true, "Do not override Escape already handled by a native control");
+    settings.onkeydown(escape);
+    assert.equal(settings.open, false);
+    assert.equal(context.document.activeElement, summary);
+
     assert.equal(element("exportStart").value, "2026-06-01");
     assert.equal(element("exportEnd").value, "2026-06-01");
     element("exportStart").value = "2026-05-01";
+    element("exportEnd").value = "2026-05-31";
     await run("load()");
     assert.equal(element("exportStart").value, "2026-05-01");
+    assert.equal(element("exportEnd").value, "2026-05-31");
+    settings.open = true;
+    await run("load()");
+    assert.equal(element("exportStart").value, "2026-05-01");
+    assert.equal(element("exportEnd").value, "2026-05-31");
+    settings.open = false;
+    outside.focus();
     for (const [start, end, expectedStart, expectedEnd] of [
         ["2026-01-01T00:00:00-04:00", "2027-01-01T00:00:00-04:00", "2026-01-01", "2026-12-31"],
         ["2026-03-01T00:00:00-07:00", "2026-04-01T00:00:00-07:00", "2026-03-01", "2026-03-31"],

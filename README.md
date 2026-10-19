@@ -59,7 +59,7 @@ The hour view shows five-minute buckets, with window-title details alongside.
   the application list scrolling within its panel. Shorter windows scroll the
   page; narrow screens retain the stacked layout.
 - Open the **Settings** gear icon in the dashboard header for **Appearance**,
-  **Updates**, and **Feedback**.
+  **Export**, **Updates**, and **Feedback**.
   Choose a light or dark theme, or follow the Windows theme; the preference is
   saved in the browser. Settings works with keyboard Enter/Space and Tab;
   Escape closes it and returns focus to Settings. Clicking or tabbing outside
@@ -68,8 +68,10 @@ The hour view shows five-minute buckets, with window-title details alongside.
   or year period without mixing data between reporting windows. **Now** returns
   any selected view to its current period. The hour view uses five-minute
   timeline buckets.
-- Export activity segments to CSV for a chosen date range or all recorded
-  history.
+- Open **Settings → Export** to export activity segments to CSV. Choose
+  **From** and **To** dates, then **Export CSV**, or use **Export all** for all
+  recorded history. Dates default to the displayed report's date range;
+  custom dates stay unchanged during refreshes of that same report.
 - The collector samples every five seconds and uses Windows APIs plus SQLite.
 - You are considered idle after five minutes without keyboard or mouse input.
 - The Windows lock screen, sign-in and credential surfaces, Windows desktop,
