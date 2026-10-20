@@ -98,7 +98,7 @@ class DashboardFeedbackTests(unittest.TestCase):
             ".feedback-links{display:flex;flex-direction:column;", HTML
         )
         self.assertIn(
-            "grid-template-rows:auto auto auto minmax(0,1fr);", HTML
+            "grid-template-rows:auto auto minmax(0,1fr);", HTML
         )
         self.assertIn(".settings-panel :focus-visible{outline:2px solid", HTML)
 

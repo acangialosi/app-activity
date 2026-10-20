@@ -65,8 +65,11 @@ The hour view shows five-minute buckets, with window-title details alongside.
   Escape closes it and returns focus to Settings. Clicking or tabbing outside
   also closes it. On narrow screens, the sections expand inline.
 - Previous and next controls navigate by the selected hour, day, week, month,
-  or year period without mixing data between reporting windows. **Now** returns
-  any selected view to its current period. The hour view uses five-minute
+  or year period without mixing data between reporting windows. The segmented
+  **Hour / Day / Week / Month / Year** controls sit below navigation on the right.
+  **Today** (or **This hour/week/month/year**) returns the selected view to its
+  current period; it and the next arrow are disabled when already current.
+  The calendar icon labels the displayed period, not a date picker. The hour view uses five-minute
   timeline buckets.
 - Open **Settings → Export** to export activity segments to CSV. Choose
   **From** and **To** dates, then **Export CSV**, or use **Export all** for all

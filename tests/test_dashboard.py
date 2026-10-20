@@ -146,7 +146,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("max-height:calc(100dvh - 180px);overflow-y:auto", HTML)
         mobile_styles = HTML.split("@media(max-width:750px)", 1)[1].split("</style>", 1)[0]
         self.assertIn(".settings-panel{position:static;width:100%;max-height:none;", mobile_styles)
-        self.assertIn("nav{flex-wrap:wrap}", mobile_styles)
+        self.assertIn(".report-nav{width:100%}", mobile_styles)
         self.assertIn(".settings>summary:focus-visible", HTML)
         self.assertIn(".settings-panel :focus-visible", HTML)
         self.assertIn(".settings-update:not([hidden]){display:inline-block}", HTML)
@@ -154,9 +154,8 @@ class DashboardTests(unittest.TestCase):
     def test_local_only_tracking_label_is_under_app_title(self) -> None:
         self.assertEqual(HTML.count("Local-only tracking"), 1)
         self.assertIn(
-            "<header><div><h1>App Activity</h1>"
-            '<div class="muted">Local-only tracking</div>'
-            '<div class="report-nav">',
+            '<header><div class="header-brand"><h1>App Activity</h1>'
+            '<div class="tracking-badge">Local-only tracking</div></div>',
             HTML,
         )
 
@@ -170,7 +169,7 @@ class DashboardTests(unittest.TestCase):
     def test_desktop_layout_scales_to_viewport_with_720_pixel_minimum(self) -> None:
         self.assertIn("@media(min-width:751px)", HTML)
         self.assertIn("height:max(720px,100dvh)", HTML)
-        self.assertIn("grid-template-rows:auto auto auto minmax(0,1fr);", HTML)
+        self.assertIn("grid-template-rows:auto auto minmax(0,1fr);", HTML)
         self.assertNotIn("grid-template-rows:auto auto auto auto", HTML)
         self.assertIn('class="card applications-card"', HTML)
         self.assertIn("#apps{flex:1;min-height:0;overflow-y:auto", HTML)
@@ -206,7 +205,7 @@ class DashboardTests(unittest.TestCase):
 
     def test_current_period_button_resets_offset(self) -> None:
         self.assertIn('id="currentPeriod"', HTML)
-        self.assertIn(">Now</button>", HTML)
+        self.assertIn("disabled>Today</button>", HTML)
         self.assertIn("currentPeriod.disabled=periodOffset===0", HTML)
         self.assertIn(
             "currentPeriod.onclick=()=>{if(periodOffset!==0)"
@@ -235,7 +234,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("<label>From<input", HTML)
         self.assertIn("<label>To<input", HTML)
         self.assertIn('<button type="submit">Export CSV</button>', HTML)
-        self.assertIn('<nav id="periods"></nav>\n<section class="metrics">', HTML)
+        self.assertIn('<nav id="periods" aria-label="Report period"></nav>', HTML)
         self.assertIn('action="/api/export" method="get"', HTML)
         self.assertIn('id="exportStart" name="start" type="date" required', HTML)
         self.assertIn('id="exportEnd" name="end" type="date" required', HTML)
