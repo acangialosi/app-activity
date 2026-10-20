@@ -331,10 +331,17 @@ async function test() {
     choose("Editor", true);
     choose("Other 0");
     assert.deepEqual(selection(), ["Other 0"], "Normal click can replace the subset with an unselected app");
+    assertPressed(["Other 0"]);
+    assert.equal(element("filterStatus").textContent, "Chart: Other 0");
+    assert.equal(element("showAllApplications").disabled, false);
+    assert.ok(!element("timeline").innerHTML.includes("bar-segment"),
+        "Selecting an application with zero activity still filters out active applications");
     choose("Editor", true);
     choose("");
     assert.deepEqual(selection(), []);
     assertPressed([]);
+    assert.equal(element("filterStatus").textContent, "Chart: All applications");
+    assert.equal(element("showAllApplications").disabled, true);
     assert.equal(element("timeline").innerHTML, allChart);
 
     const third = {name: "Third", seconds: 120, percent: 50, windows: []};
