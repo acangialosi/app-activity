@@ -153,6 +153,25 @@ class AuditTests(unittest.TestCase):
 
 
 class ToolSetupTests(unittest.TestCase):
+    def test_auditor_version_has_one_authoritative_requirement_pin(self) -> None:
+        self.assertEqual(security.pip_audit_version("# tooling\npip-audit==9.8.7\n"), "9.8.7")
+        for content in ("", "pip-audit>=9.8.7", "pip-audit==1.0.0\npip-audit==2.0.0",
+                        'pip-audit==1.0.0; python_version >= "3.11"'):
+            with self.subTest(content=content), self.assertRaises(security.SecurityError):
+                security.pip_audit_version(content)
+
+    def test_auditor_setup_verifies_the_version_changed_by_dependabot(self) -> None:
+        executable = self.tools / "python.exe"
+        executable.write_bytes(b"fixture")
+        (self.tools / "requirements-security.txt").write_text("pip-audit==9.8.7\n", encoding="utf-8")
+        with patch.object(security, "ROOT", self.tools), patch.object(
+            security, "audit_python", return_value=executable
+        ), patch.object(security, "verify_audit_interpreter"), patch.object(
+            security, "run", return_value=subprocess.CompletedProcess([], 0, "", "")
+        ), patch.object(security, "check_version") as version:
+            security.setup_dependencies()
+        self.assertEqual(version.call_args.args[1], "9.8.7")
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -199,7 +218,8 @@ class ToolSetupTests(unittest.TestCase):
         ) as download, patch.object(security, "check_version") as version:
             security.setup_git("x64")
         self.assertEqual(security.local_git().read_bytes(), b"verified fixture")
-        self.assertIn("MinGit-2.56.0.2-64-bit.zip", download.call_args.args[0])
+        asset_version = security.MINGIT_VERSION.replace(".windows.", ".")
+        self.assertIn(f"MinGit-{asset_version}-64-bit.zip", download.call_args.args[0])
         self.assertEqual(download.call_args.args[1], security.MINGIT_HASHES["x64"])
         self.assertEqual(version.call_args.args[1], security.MINGIT_VERSION)
         self.assertEqual(probe.call_args.args[1], Path(version.call_args.args[0][0]))

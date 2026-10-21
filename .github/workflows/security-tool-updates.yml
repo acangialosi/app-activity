@@ -1,0 +1,57 @@
+name: Security tool updates
+
+on:
+  schedule:
+    - cron: "23 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-tool-updates
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    outputs:
+      base: ${{ steps.updates.outputs.base }}
+      updates: ${{ steps.updates.outputs.updates }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14"
+      - name: Discover stable releases and verify archive digests
+        id: updates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m tools.update_security_tools check
+
+  publish:
+    needs: discover
+    if: needs.discover.outputs.updates != '{}'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.discover.outputs.base }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14"
+      - name: Open a draft PR without changing existing proposals
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SECURITY_TOOL_BASE: ${{ needs.discover.outputs.base }}
+          SECURITY_TOOL_UPDATES: ${{ needs.discover.outputs.updates }}
+        run: python -m tools.update_security_tools publish
