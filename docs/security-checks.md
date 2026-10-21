@@ -95,6 +95,11 @@ closing a proposal without merging, upgrade those pins manually if needed.
 Open Dependabot or contributor PRs changing the same pin files also defer a
 new proposal, avoiding overlapping implementation work.
 If main moves between discovery and publication, rerun the workflow.
+If a branch was created but PR creation failed, a retry can reuse it even after
+main advances: its original base must be an ancestor of main, and its complete
+tree must exactly match the proposed pins applied to that original base.
+Contributor edits are never overwritten. Recovered draft PRs may need main
+incorporated before the normal strict up-to-date checks permit merging.
 
 The workflow uses GitHub's built-in token, not a stored personal token or
 third-party update service. The repository's combined **Allow GitHub Actions

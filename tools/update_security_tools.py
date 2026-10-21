@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import base64
 import hashlib
 import json
 import os
@@ -73,8 +74,12 @@ def replace_constant(source: str, name: str, value: str | dict) -> str:
     return "".join(lines)
 
 
-def current_pins(repo: Path) -> dict:
-    source = (repo / SOURCE_PATH).read_text(encoding="utf-8")
+def pin_files(repo: Path) -> dict[str, str]:
+    return {path: (repo / path).read_text(encoding="utf-8") for path in (SOURCE_PATH, REQUIREMENTS_PATH)}
+
+
+def parse_pins(files: dict[str, str]) -> dict:
+    source = files[SOURCE_PATH]
     pins = {
         tool: {
             "version": ast.literal_eval(assignment(source, f"{tool}_VERSION").value),
@@ -83,9 +88,13 @@ def current_pins(repo: Path) -> dict:
         for tool in NATIVE_TOOLS
     }
     pins["PIP_AUDIT"] = {
-        "version": security.pip_audit_version((repo / REQUIREMENTS_PATH).read_text(encoding="utf-8")),
+        "version": security.pip_audit_version(files[REQUIREMENTS_PATH]),
     }
     return pins
+
+
+def current_pins(repo: Path) -> dict:
+    return parse_pins(pin_files(repo))
 
 
 def validate_pin(tool: str, pin: dict) -> None:
@@ -102,11 +111,11 @@ def validate_pin(tool: str, pin: dict) -> None:
             raise security.SecurityError(f"{tool} needs SHA-256 pins for both Windows architectures.")
 
 
-def render_updates(repo: Path, updates: dict) -> dict[str, str]:
-    current = current_pins(repo)
+def render_pin_files(original_files: dict[str, str], updates: dict) -> dict[str, str]:
+    current = parse_pins(original_files)
     if not isinstance(updates, dict) or set(updates) - set(current):
         raise security.SecurityError("Update plan contains unsupported tools.")
-    source = original = (repo / SOURCE_PATH).read_text(encoding="utf-8")
+    source = original = original_files[SOURCE_PATH]
     files = {}
     for tool, pin in updates.items():
         validate_pin(tool, pin)
@@ -121,7 +130,7 @@ def render_updates(repo: Path, updates: dict) -> dict[str, str]:
             source = replace_constant(source, f"{tool}_VERSION", pin["version"])
             source = replace_constant(source, f"{tool}_HASHES", pin["hashes"])
         else:
-            requirements = (repo / REQUIREMENTS_PATH).read_text(encoding="utf-8")
+            requirements = original_files[REQUIREMENTS_PATH]
             updated, count = re.subn(
                 r"(?m)^[ \t]*pip-audit==[^\s]+[ \t]*$",
                 f"pip-audit=={pin['version']}", requirements,
@@ -134,11 +143,14 @@ def render_updates(repo: Path, updates: dict) -> dict[str, str]:
     return files
 
 
+def render_updates(repo: Path, updates: dict) -> dict[str, str]:
+    return render_pin_files(pin_files(repo), updates)
+
+
 def asset_name(tool: str, version: str, architecture: str) -> str:
     if tool == "BETTERLEAKS":
         return f"betterleaks_{version}_windows_{architecture}.zip"
-    suffix = {"arm64": "arm64", "x64": "64-bit"}[architecture]
-    return f"MinGit-{version.replace('.windows.', '.')}-{suffix}.zip"
+    return security.mingit_asset_name(version, architecture)
 
 
 def asset_url(tool: str, version: str, architecture: str) -> str:
@@ -213,6 +225,20 @@ def github_pages(resource: str) -> Iterator[dict]:
         page += 1
 
 
+def original_pin_files(resource: str, revision: str) -> dict[str, str]:
+    files = {}
+    for path in (SOURCE_PATH, REQUIREMENTS_PATH):
+        blob = github(f"{resource}/contents/{path}?ref={revision}")
+        if not isinstance(blob, dict) or blob.get("encoding") != "base64" or not isinstance(blob.get("content"), str):
+            raise security.SecurityError("Cannot verify the original update branch's pin files.")
+        try:
+            content = base64.b64decode("".join(blob["content"].split()), validate=True).decode("utf-8")
+            files[path] = content.replace("\r\n", "\n").replace("\r", "\n")
+        except ValueError as error:
+            raise security.SecurityError("The original pin files have an invalid encoding.") from error
+    return files
+
+
 def publish(repo: Path, updates: dict, base: str) -> str | None:
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     if (
@@ -251,7 +277,25 @@ def publish(repo: Path, updates: dict, base: str) -> str | None:
     if previous:
         print(f"These upgrades were already proposed: {previous[0]['html_url']}; not duplicating the PR.")
         return None
-    base_commit = github(f"{resource}/git/commits/{base}")
+    refs = github(f"{resource}/git/matching-refs/heads/{branch}")
+    if not isinstance(refs, list):
+        raise security.SecurityError("Could not inspect the update branch.")
+    matches = [ref for ref in refs if ref["ref"] == f"refs/heads/{branch}"]
+    original_base = base
+    existing = None
+    if matches:
+        existing = github(f"{resource}/git/commits/{matches[0]['object']['sha']}")
+        if len(existing["parents"]) != 1:
+            raise security.SecurityError("An unexpected update branch already exists; refusing to overwrite it.")
+        original_base = existing["parents"][0]["sha"]
+        if original_base != base:
+            comparison = github(f"{resource}/compare/{original_base}...{base}")
+            if comparison["merge_base_commit"]["sha"] != original_base or comparison["status"] != "ahead":
+                raise security.SecurityError("The orphan update branch is not based on earlier main; refusing to reuse it.")
+            files = render_pin_files(original_pin_files(resource, original_base), updates)
+            if not files:
+                raise security.SecurityError("The orphan branch has no matching upgrade changes; refusing to reuse it.")
+    base_commit = github(f"{resource}/git/commits/{original_base}")
     tree = github(f"{resource}/git/trees", {
         "base_tree": base_commit["tree"]["sha"],
         "tree": [
@@ -259,13 +303,8 @@ def publish(repo: Path, updates: dict, base: str) -> str | None:
             for path, content in sorted(files.items())
         ],
     })
-    refs = github(f"{resource}/git/matching-refs/heads/{branch}")
-    if not isinstance(refs, list):
-        raise security.SecurityError("Could not inspect the update branch.")
-    matches = [ref for ref in refs if ref["ref"] == f"refs/heads/{branch}"]
-    if matches:
-        commit = github(f"{resource}/git/commits/{matches[0]['object']['sha']}")
-        if commit["tree"]["sha"] != tree["sha"] or [parent["sha"] for parent in commit["parents"]] != [base]:
+    if existing:
+        if existing["tree"]["sha"] != tree["sha"]:
             raise security.SecurityError("An unexpected update branch already exists; refusing to overwrite it.")
     else:
         commit = github(f"{resource}/git/commits", {
@@ -285,6 +324,8 @@ def publish(repo: Path, updates: dict, base: str) -> str | None:
             "Keep this PR in draft until required Windows tests/build/security checks pass and "
             "the latest commit has completed Copilot review with all valid findings addressed. "
             "Review release notes and any major-version compatibility changes before merging.\n\n"
+            "A recovered orphan branch may predate main. Incorporate updated main and rerun all "
+            "checks/review if required by the normal strict up-to-date protection.\n\n"
             "This workflow never approves, merges, force-pushes, or changes repository protections. "
             "It leaves an existing upgrade PR untouched so contributor fixes are preserved."
         ),

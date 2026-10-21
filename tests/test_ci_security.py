@@ -194,6 +194,16 @@ class ToolSetupTests(unittest.TestCase):
         download.assert_not_called()
         self.assertFalse(security.local_git().exists())
 
+    def test_mingit_uses_published_revision_one_and_later_archive_names(self) -> None:
+        for version, architecture, expected in (
+            ("2.56.0.windows.1", "arm64", "MinGit-2.56.0-arm64.zip"),
+            ("2.56.0.windows.1", "x64", "MinGit-2.56.0-64-bit.zip"),
+            ("2.56.0.windows.2", "arm64", "MinGit-2.56.0.2-arm64.zip"),
+            ("2.56.0.windows.2", "x64", "MinGit-2.56.0.2-64-bit.zip"),
+        ):
+            with self.subTest(version=version, architecture=architecture):
+                self.assertEqual(security.mingit_asset_name(version, architecture), expected)
+
     def test_local_git_is_selected_only_for_security_subprocesses(self) -> None:
         executable = security.local_git()
         executable.parent.mkdir(parents=True)
@@ -218,8 +228,7 @@ class ToolSetupTests(unittest.TestCase):
         ) as download, patch.object(security, "check_version") as version:
             security.setup_git("x64")
         self.assertEqual(security.local_git().read_bytes(), b"verified fixture")
-        asset_version = security.MINGIT_VERSION.replace(".windows.", ".")
-        self.assertIn(f"MinGit-{asset_version}-64-bit.zip", download.call_args.args[0])
+        self.assertIn(security.mingit_asset_name(security.MINGIT_VERSION, "x64"), download.call_args.args[0])
         self.assertEqual(download.call_args.args[1], security.MINGIT_HASHES["x64"])
         self.assertEqual(version.call_args.args[1], security.MINGIT_VERSION)
         self.assertEqual(probe.call_args.args[1], Path(version.call_args.args[0][0]))

@@ -118,6 +118,17 @@ def download_release(url: str, digest: str, tool: str) -> bytes:
     return archive
 
 
+def mingit_asset_name(version: str, architecture: str) -> str:
+    match = re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)\.windows\.([1-9][0-9]*)", version)
+    if not match or architecture not in {"arm64", "x64"}:
+        raise SecurityError("Unsupported MinGit version or Windows architecture.")
+    archive_version, revision = match.groups()
+    if revision != "1":
+        archive_version += "." + revision
+    suffix = {"arm64": "arm64", "x64": "64-bit"}[architecture]
+    return f"MinGit-{archive_version}-{suffix}.zip"
+
+
 def setup_git(architecture: str) -> None:
     environment = clean_environment()
     if local_git().exists():
@@ -127,11 +138,9 @@ def setup_git(architecture: str) -> None:
     destination = local_git().parent.parent
     if destination.exists():
         raise SecurityError("Runner Git is incomplete or incompatible; rerun the security job.")
-    version = MINGIT_VERSION.replace(".windows.", ".")
-    suffix = {"arm64": "arm64", "x64": "64-bit"}[architecture]
     url = (
         f"https://github.com/git-for-windows/git/releases/download/v{MINGIT_VERSION}/"
-        f"MinGit-{version}-{suffix}.zip"
+        f"{mingit_asset_name(MINGIT_VERSION, architecture)}"
     )
     archive = download_release(url, MINGIT_HASHES[architecture], "MinGit")
     with tempfile.TemporaryDirectory(prefix="mingit-setup-", dir=TOOLS) as directory:

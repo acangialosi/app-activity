@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import contextlib
 import copy
 import io
@@ -18,6 +19,7 @@ from tools import update_security_tools as updater
 BASE = "a" * 40
 COMMIT = "b" * 40
 TREE = "c" * 40
+NEXT_BASE = "f" * 40
 
 
 class UpdateFixture(unittest.TestCase):
@@ -113,6 +115,17 @@ class PinUpdateTests(UpdateFixture):
         with self.assertRaisesRegex(security.SecurityError, "exactly one"):
             updater.render_updates(self.repo, self.updates)
 
+    def test_original_pin_snapshot_uses_the_checkout_readers_newline_normalization(self) -> None:
+        files = updater.pin_files(self.repo)
+
+        def contents(path):
+            name = path.split("/contents/", 1)[1].split("?ref=", 1)[0]
+            encoded = base64.b64encode(files[name].replace("\n", "\r\n").encode("utf-8")).decode("ascii")
+            return {"encoding": "base64", "content": encoded}
+
+        with patch.object(updater, "github", side_effect=contents):
+            self.assertEqual(updater.original_pin_files("repos/fixture/example", BASE), files)
+
     def test_discovery_verifies_every_changed_native_archive_without_installing(self) -> None:
         with patch.object(security, "download_release") as download:
             self.assertEqual(self.discovery(self.updates), self.updates)
@@ -126,6 +139,19 @@ class PinUpdateTests(UpdateFixture):
         with patch.object(security, "download_release") as download:
             self.assertEqual(self.discovery(self.current), {})
         download.assert_not_called()
+
+    def test_discovery_accepts_literal_published_revision_one_archives(self) -> None:
+        def published_names(releases, package):
+            assets = releases["repos/git-for-windows/git/releases/latest"]["assets"]
+            for asset, name in zip(assets, ("MinGit-2.2.0-arm64.zip", "MinGit-2.2.0-64-bit.zip")):
+                asset["name"] = name
+                asset["browser_download_url"] = (
+                    "https://github.com/git-for-windows/git/releases/download/v2.2.0.windows.1/" + name
+                )
+
+        with patch.object(security, "download_release") as download:
+            self.assertEqual(self.discovery(self.updates, published_names), self.updates)
+        self.assertTrue(any("MinGit-2.2.0-64-bit.zip" in call.args[0] for call in download.call_args_list))
 
     def test_bad_release_metadata_and_yanked_wheels_never_create_partial_updates(self) -> None:
         path = "repos/betterleaks/betterleaks/releases/latest"
@@ -183,6 +209,8 @@ class PublicationTests(UpdateFixture):
         self.branch = None
         self.fail_pr_creation = False
         self.default_sha = BASE
+        self.original_files = updater.pin_files(self.repo)
+        self.original_is_ancestor = True
 
     def api(self, path: str, data: dict | None = None):
         self.calls.append((path, copy.deepcopy(data)))
@@ -199,6 +227,11 @@ class PublicationTests(UpdateFixture):
             return self.previous_pulls
         if path == prefix + "/git/commits/" + BASE:
             return {"tree": {"sha": "d" * 40}}
+        if path == prefix + "/compare/" + BASE + "..." + NEXT_BASE:
+            return {"merge_base_commit": {"sha": BASE}, "status": "ahead" if self.original_is_ancestor else "diverged"}
+        if "/contents/" in path:
+            name = path.split("/contents/", 1)[1].split("?ref=", 1)[0]
+            return {"encoding": "base64", "content": base64.b64encode(self.original_files[name].encode("utf-8")).decode("ascii")}
         if path == prefix + "/git/trees":
             return {"sha": TREE}
         if "/git/matching-refs/heads/" in path:
@@ -271,6 +304,40 @@ class PublicationTests(UpdateFixture):
         self.assertIsNotNone(self.publish())
         writes = [path.rsplit("/", 1)[-1] for path, data in self.calls if data is not None]
         self.assertEqual(writes, ["trees", "pulls"])
+
+    def test_orphan_retry_after_main_advances_verifies_original_tree_without_overwriting(self) -> None:
+        self.fail_pr_creation = True
+        with self.assertRaises(security.SecurityError):
+            self.publish()
+        self.calls.clear()
+        self.fail_pr_creation = False
+        self.default_sha = NEXT_BASE
+        (self.repo / updater.SOURCE_PATH).write_text(self.source + "\n# Later main change\n", encoding="utf-8")
+        with patch.object(security, "git", side_effect=lambda repo, *args: "" if args[0] == "status" else NEXT_BASE), patch.object(
+            updater, "github", side_effect=self.api
+        ), contextlib.redirect_stdout(io.StringIO()):
+            self.assertIsNotNone(updater.publish(self.repo, self.updates, NEXT_BASE))
+        writes = [(path.rsplit("/", 1)[-1], data) for path, data in self.calls if data is not None]
+        self.assertEqual([path for path, _ in writes], ["trees", "pulls"])
+        source = next(file["content"] for file in writes[0][1]["tree"] if file["path"] == updater.SOURCE_PATH)
+        self.assertNotIn("Later main change", source)
+        self.assertIn("may predate main", writes[1][1]["body"])
+        self.assertEqual(self.existing_commit["parents"], [{"sha": BASE}])
+        self.assertIn("Later main change", (self.repo / updater.SOURCE_PATH).read_text(encoding="utf-8"))
+
+    def test_recovery_rejects_non_main_ancestry_and_contributor_edits(self) -> None:
+        self.default_sha = NEXT_BASE
+        self.existing_commit = {"tree": {"sha": TREE}, "parents": [{"sha": BASE}]}
+        for ancestor, tree in ((False, TREE), (True, "e" * 40)):
+            self.calls.clear()
+            self.original_is_ancestor = ancestor
+            self.existing_commit["tree"]["sha"] = tree
+            with self.subTest(ancestor=ancestor, tree=tree), patch.object(
+                security, "git", side_effect=lambda repo, *args: "" if args[0] == "status" else NEXT_BASE
+            ), patch.object(updater, "github", side_effect=self.api):
+                with self.assertRaises(security.SecurityError):
+                    updater.publish(self.repo, self.updates, NEXT_BASE)
+            self.assertFalse(any(data is not None and not path.endswith("/trees") for path, data in self.calls))
 
     def test_overlapping_dependabot_or_contributor_pr_is_not_duplicated(self) -> None:
         for branch in ("dependabot/pip/pip-audit-1.1.0", "contributor/update-scanner"):
