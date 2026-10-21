@@ -20,7 +20,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "app-activity-ci-security"
 BETTERLEAKS_VERSION = "1.9.0"
-PIP_AUDIT_VERSION = "2.10.1"
 BETTERLEAKS_HASHES = {
     "arm64": "3e5b9b6cdbfe8d486ae2dd2fa137473dc9ab42bf50317f051b73561121861816",
     "x64": "b765daec9fda475b031b5a5159798cbe4294a3f2a50683cbc0471226e376d3da",
@@ -119,6 +118,17 @@ def download_release(url: str, digest: str, tool: str) -> bytes:
     return archive
 
 
+def mingit_asset_name(version: str, architecture: str) -> str:
+    match = re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)\.windows\.([1-9][0-9]*)", version)
+    if not match or architecture not in {"arm64", "x64"}:
+        raise SecurityError("Unsupported MinGit version or Windows architecture.")
+    archive_version, revision = match.groups()
+    if revision != "1":
+        archive_version += "." + revision
+    suffix = {"arm64": "arm64", "x64": "64-bit"}[architecture]
+    return f"MinGit-{archive_version}-{suffix}.zip"
+
+
 def setup_git(architecture: str) -> None:
     environment = clean_environment()
     if local_git().exists():
@@ -128,11 +138,9 @@ def setup_git(architecture: str) -> None:
     destination = local_git().parent.parent
     if destination.exists():
         raise SecurityError("Runner Git is incomplete or incompatible; rerun the security job.")
-    version = MINGIT_VERSION.replace(".windows.", ".")
-    suffix = {"arm64": "arm64", "x64": "64-bit"}[architecture]
     url = (
         f"https://github.com/git-for-windows/git/releases/download/v{MINGIT_VERSION}/"
-        f"MinGit-{version}-{suffix}.zip"
+        f"{mingit_asset_name(MINGIT_VERSION, architecture)}"
     )
     archive = download_release(url, MINGIT_HASHES[architecture], "MinGit")
     with tempfile.TemporaryDirectory(prefix="mingit-setup-", dir=TOOLS) as directory:
@@ -152,6 +160,19 @@ def setup_git(architecture: str) -> None:
 
 def audit_python() -> Path:
     return TOOLS / "venv" / "Scripts" / "python.exe"
+
+
+def pip_audit_version(requirements: str | None = None) -> str:
+    if requirements is None:
+        requirements = (ROOT / "requirements-security.txt").read_text(encoding="utf-8")
+    pins = [
+        match.group(1)
+        for line in requirements.splitlines()
+        if (match := re.fullmatch(r"pip-audit==([A-Za-z0-9][A-Za-z0-9.!+_-]*)", line.strip()))
+    ]
+    if len(pins) != 1:
+        raise SecurityError("requirements-security.txt must contain exactly one unconditional pip-audit pin.")
+    return pins[0]
 
 
 def verify_audit_interpreter() -> None:
@@ -226,7 +247,7 @@ def setup_dependencies() -> None:
             "Security-tool installation failed. Verify PyPI connectivity and "
             "wheel availability for this Python/Windows version; no global packages were changed."
         )
-    check_version([str(audit_python()), "-I", "-m", "pip_audit", "--version"], PIP_AUDIT_VERSION)
+    check_version([str(audit_python()), "-I", "-m", "pip_audit", "--version"], pip_audit_version())
     print("Pinned pip-audit installed in runner temporary storage.")
 
 
@@ -345,7 +366,7 @@ def audit_dependencies(repo: Path, revisions: list[str]) -> None:
         raise SecurityError("Audit coverage requires Windows Python 3.11-3.14; use the Windows CI matrix.")
     python = audit_python()
     verify_audit_interpreter()
-    check_version([str(python), "-I", "-m", "pip_audit", "--version"], PIP_AUDIT_VERSION)
+    check_version([str(python), "-I", "-m", "pip_audit", "--version"], pip_audit_version())
     seen = set()
     for revision in revisions:
         manifests = dependency_manifests(repo, revision)

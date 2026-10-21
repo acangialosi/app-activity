@@ -153,6 +153,25 @@ class AuditTests(unittest.TestCase):
 
 
 class ToolSetupTests(unittest.TestCase):
+    def test_auditor_version_has_one_authoritative_requirement_pin(self) -> None:
+        self.assertEqual(security.pip_audit_version("# tooling\npip-audit==9.8.7\n"), "9.8.7")
+        for content in ("", "pip-audit>=9.8.7", "pip-audit==1.0.0\npip-audit==2.0.0",
+                        'pip-audit==1.0.0; python_version >= "3.11"'):
+            with self.subTest(content=content), self.assertRaises(security.SecurityError):
+                security.pip_audit_version(content)
+
+    def test_auditor_setup_verifies_the_version_changed_by_dependabot(self) -> None:
+        executable = self.tools / "python.exe"
+        executable.write_bytes(b"fixture")
+        (self.tools / "requirements-security.txt").write_text("pip-audit==9.8.7\n", encoding="utf-8")
+        with patch.object(security, "ROOT", self.tools), patch.object(
+            security, "audit_python", return_value=executable
+        ), patch.object(security, "verify_audit_interpreter"), patch.object(
+            security, "run", return_value=subprocess.CompletedProcess([], 0, "", "")
+        ), patch.object(security, "check_version") as version:
+            security.setup_dependencies()
+        self.assertEqual(version.call_args.args[1], "9.8.7")
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -174,6 +193,16 @@ class ToolSetupTests(unittest.TestCase):
             security.setup_git("x64")
         download.assert_not_called()
         self.assertFalse(security.local_git().exists())
+
+    def test_mingit_uses_published_revision_one_and_later_archive_names(self) -> None:
+        for version, architecture, expected in (
+            ("2.56.0.windows.1", "arm64", "MinGit-2.56.0-arm64.zip"),
+            ("2.56.0.windows.1", "x64", "MinGit-2.56.0-64-bit.zip"),
+            ("2.56.0.windows.2", "arm64", "MinGit-2.56.0.2-arm64.zip"),
+            ("2.56.0.windows.2", "x64", "MinGit-2.56.0.2-64-bit.zip"),
+        ):
+            with self.subTest(version=version, architecture=architecture):
+                self.assertEqual(security.mingit_asset_name(version, architecture), expected)
 
     def test_local_git_is_selected_only_for_security_subprocesses(self) -> None:
         executable = security.local_git()
@@ -199,7 +228,7 @@ class ToolSetupTests(unittest.TestCase):
         ) as download, patch.object(security, "check_version") as version:
             security.setup_git("x64")
         self.assertEqual(security.local_git().read_bytes(), b"verified fixture")
-        self.assertIn("MinGit-2.56.0.2-64-bit.zip", download.call_args.args[0])
+        self.assertIn(security.mingit_asset_name(security.MINGIT_VERSION, "x64"), download.call_args.args[0])
         self.assertEqual(download.call_args.args[1], security.MINGIT_HASHES["x64"])
         self.assertEqual(version.call_args.args[1], security.MINGIT_VERSION)
         self.assertEqual(probe.call_args.args[1], Path(version.call_args.args[0][0]))

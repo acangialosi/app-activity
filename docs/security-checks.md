@@ -18,8 +18,9 @@ The `Security` workflow runs on pull requests (including forks), pushes to
 Existing strict `test`/`build` requirements, zero required human approvals,
 resolved review conversations, and protections against force pushing/deleting
 `main` remain intact. CodeQL, Dependabot alerts, GitHub secret scanning, and
-secret push protection are retained. Automatic Dependabot update PRs are not
-enabled by this change.
+secret push protection are retained. Dependabot automatic security-update PRs
+are enabled in repository settings; these are proposed fixes, not automatic
+merges.
 
 CI checks execute after code reaches GitHub and block merging when they fail.
 They do not prevent the initial upload. GitHub secret push protection provides
@@ -27,7 +28,7 @@ separate server-side rejection for supported credential patterns.
 
 ## Secret scanning
 
-The secret job installs checksum-pinned Betterleaks **1.9.0** on its Windows
+The secret job installs checksum-pinned Betterleaks on its Windows
 runner and scans all fetched refs plus HEAD, using complete Git history.
 Commit patches, merge changes, and commit messages are included; adding a
 secret and later deleting it does not remove the finding. Shallow history
@@ -46,13 +47,17 @@ reports, and incomplete scans fail the job.
 
 The scanner and any needed checksum-pinned Git compatibility fix are installed
 under the runner's temporary directory, not in the checkout or on developer
-machines. There is no automatic scanner-update job; version/checksum changes
-are reviewed as ordinary repository changes.
+machines. Exact native-tool versions and architecture checksums are recorded
+in [`tools/ci_security.py`](../tools/ci_security.py). Automated version/checksum
+proposals are reviewed as ordinary repository changes.
 
 ## Dependency auditing
 
 Each Windows/Python 3.11-3.14 job independently installs pinned
-`pip-audit==2.10.1` in an isolated runner environment. It audits the committed
+pip-audit in an isolated runner environment. Its single authoritative version
+pin is [`requirements-security.txt`](../requirements-security.txt), so a
+Dependabot fix to that requirement also updates the installed-version check.
+It audits the committed
 HEAD's root `requirements*.txt` files, including build and security-tool
 dependencies and their resolved transitive packages, not unrelated global
 packages.
@@ -66,6 +71,52 @@ Package names and versions are sent to PyPI for resolution and advisory
 queries; repository contents and secrets are not. Dependency review is not
 added as a duplicate vulnerability gate or an unrequested license policy.
 
+## Reviewed tool upgrades
+
+The `Security tool updates` workflow checks weekly on Mondays at 08:23 UTC
+and can be run manually from the default branch. It discovers stable releases
+of Betterleaks, pip-audit, and the isolated MinGit compatibility helper.
+Scanner execution still uses exact reviewed pins, never an unreviewed `latest`.
+Vulnerability advisory data continues to refresh independently on every audit.
+
+Discovery has read-only repository access. New native-tool archives for Windows
+x64 and ARM64 must match SHA-256 digests published on the official GitHub
+releases before any update plan is published. Prereleases, downgrades,
+missing/yanked wheels, missing architecture archives, changed checksums for an
+already-pinned version, and download/metadata errors fail the job. The updater
+does not install or execute downloaded scanner binaries.
+
+A separate publication job can write only repository contents and pull
+requests. It creates a draft PR containing the proposed pin/checksum changes.
+It does not approve reviews or workflow runs, merge, force-push, or modify
+protections. Existing open scanner-upgrade PRs are left untouched, including
+contributor fixes. Already-proposed versions are not proposed again; after
+closing a proposal without merging, upgrade those pins manually if needed.
+Open Dependabot or contributor PRs changing the same pin files also defer a
+new proposal, avoiding overlapping implementation work.
+If main moves between discovery and publication, rerun the workflow.
+If a branch was created but PR creation failed, a retry can reuse it even after
+main advances: its original base must be an ancestor of main, and its complete
+tree must exactly match the proposed pins applied to that original base.
+Contributor edits are never overwritten. Recovered draft PRs may need main
+incorporated before the normal strict up-to-date checks permit merging.
+
+The workflow uses GitHub's built-in token, not a stored personal token or
+third-party update service. The repository's combined **Allow GitHub Actions
+to create and approve pull requests** setting is enabled for PR creation;
+default token permissions remain read-only, and this workflow never uses the
+review-approval capability. GitHub places workflows triggered by token-created
+PRs in an approval-required state. A maintainer must select **Approve workflows
+to run**, then inspect required checks and the latest-commit Copilot review.
+See [GitHub's workflow-trigger documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+
+Keep generated PRs in draft until the normal acceptance/review process is
+complete. Review upstream release notes and major-version changes, resolve
+valid findings, and merge only with all required gates satisfied. Urgent tool
+security fixes can be proposed immediately with a manual run. Dependabot
+security-fix PRs are separate and can be created as advisories appear, without
+waiting for this weekly schedule.
+
 ## Workflow implementation and tests
 
 `tools/ci_security.py` is an implementation helper for GitHub Actions. Its
@@ -74,7 +125,7 @@ combined check, outgoing-ref hook, or hook-installation command. Scanner and
 auditor setup steps are independent, so the secret job does not install
 pip-audit and dependency jobs do not install Betterleaks.
 
-The workflow uses SHA-pinned actions, read-only repository permissions, no
+The `Security` workflow uses SHA-pinned actions, read-only repository permissions, no
 repository secrets, and checkout without persisted credentials. Existing
 security settings and branch rules are not modified by the workflow.
 
