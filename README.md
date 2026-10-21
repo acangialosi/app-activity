@@ -66,7 +66,10 @@ The hour view shows five-minute buckets, with window-title details alongside.
   also closes it. On narrow screens, the sections expand inline.
 - Previous and next controls navigate by the selected hour, day, week, month,
   or year period without mixing data between reporting windows. The segmented
-  **Hour / Day / Week / Month / Year** controls sit below navigation on the right.
+  **Hour / Day / Week / Month / Year** controls sit below navigation on the right,
+  sharing its left and right edges, with **Settings** separately alongside on
+  desktop. Narrow screens wrap the date controls and stack Settings above the
+  full-width period controls.
   **Today** (or **This hour/week/month/year**) returns the selected view to its
   current period; it and the next arrow are disabled when already current.
   The calendar icon labels the displayed period, not a date picker. The hour view uses five-minute
