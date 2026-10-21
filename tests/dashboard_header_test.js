@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-const scripts = JSON.parse(fs.readFileSync(0, "utf8"));
+const {scripts, reports} = JSON.parse(fs.readFileSync(0, "utf8"));
 const elements = new Map();
 function element(id) {
     if (!elements.has(id)) elements.set(id, {
@@ -42,11 +42,9 @@ const context = vm.createContext({
         })};
         requests.push(url);
         const query = new URL(url, "http://localhost").searchParams;
-        return {json: async () => ({
-            period: query.get("period"), label: `${query.get("period")} ${query.get("offset")}`,
-            start: "2026-10-19T00:00:00+00:00", end: "2026-10-20T00:00:00+00:00",
-            active_seconds: 0, idle_seconds: 0, tracked_seconds: 0, apps: [], timeline: [],
-        })};
+        const report = reports[query.get("period")][query.get("offset")];
+        assert.ok(report, `Unexpected report request: ${url}`);
+        return {json: async () => report};
     },
 });
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -59,6 +57,10 @@ async function test() {
     assert.equal(element("currentPeriod").textContent, "Today");
     assert.equal(element("nextPeriod").disabled, true);
     assert.equal(element("currentPeriod").disabled, true);
+    assert.equal(element("label").textContent, reports.day[0].label);
+    assert.ok(reports.day[0].label.length >= 29, "Exercise a long real day label");
+    assert.ok(reports.hour[0].label.length >= 48, "Exercise a long real hour label");
+    assert.ok(reports.week[0].label.length >= 21, "Exercise a real week range label");
     const labels = ["This hour", "Today", "This week", "This month", "This year"];
     for (const [index, button] of buttons.entries()) {
         button.onclick();
@@ -66,6 +68,9 @@ async function test() {
         const period = button.textContent.toLowerCase();
         assert.equal(requests.at(-1), `/api/report?period=${period}&offset=0`);
         assert.equal(element("currentPeriod").textContent, labels[index]);
+        assert.equal(element("label").textContent, reports[period][0].label);
+        assert.equal(element("nextPeriod").disabled, true);
+        assert.equal(element("currentPeriod").disabled, true);
         assert.deepEqual(buttons.map(item => item.ariaPressed), buttons.map((_, i) => String(i === index)));
         assert.deepEqual(buttons.map(item => item.className), buttons.map((_, i) => i === index ? "active" : ""));
         for (let offset = -1; offset >= -2; offset--) {
@@ -74,14 +79,16 @@ async function test() {
             assert.equal(element("currentPeriod").disabled, false);
             await flush();
             assert.equal(requests.at(-1), `/api/report?period=${period}&offset=${offset}`);
-            assert.equal(element("label").textContent, `${period} ${offset}`);
+            assert.equal(element("label").textContent, reports[period][offset].label);
         }
         element("nextPeriod").onclick();
         await flush();
         assert.equal(requests.at(-1), `/api/report?period=${period}&offset=-1`);
+        assert.equal(element("label").textContent, reports[period][-1].label);
         element("currentPeriod").onclick();
         await flush();
         assert.equal(requests.at(-1), `/api/report?period=${period}&offset=0`);
+        assert.equal(element("label").textContent, reports[period][0].label);
         assert.equal(element("currentPeriod").disabled, true);
         assert.equal(element("nextPeriod").disabled, true);
         const count = requests.length;

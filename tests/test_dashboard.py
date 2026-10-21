@@ -140,13 +140,13 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(set(link["rel"].split()), {"noopener", "noreferrer"})
 
     def test_settings_panel_overlays_desktop_but_expands_inline_on_mobile(self) -> None:
-        self.assertIn(".settings{position:relative;flex:none;max-width:100%}", HTML)
+        self.assertIn(".settings{grid-area:settings;position:relative;flex:none;max-width:100%}", HTML)
         self.assertIn(".settings-panel{position:absolute;right:0;", HTML)
         self.assertIn("width:min(340px,calc(100vw - 40px))", HTML)
         self.assertIn("max-height:calc(100dvh - 180px);overflow-y:auto", HTML)
         mobile_styles = HTML.split("@media(max-width:750px)", 1)[1].split("</style>", 1)[0]
         self.assertIn(".settings-panel{position:static;width:100%;max-height:none;", mobile_styles)
-        self.assertIn(".report-nav{width:100%}", mobile_styles)
+        self.assertIn(".report-nav{width:100%;flex-wrap:wrap}", mobile_styles)
         self.assertIn(".settings>summary:focus-visible", HTML)
         self.assertIn(".settings-panel :focus-visible", HTML)
         self.assertIn(".settings-update:not([hidden]){display:inline-block}", HTML)
