@@ -24,10 +24,10 @@ BETTERLEAKS_HASHES = {
     "arm64": "3e5b9b6cdbfe8d486ae2dd2fa137473dc9ab42bf50317f051b73561121861816",
     "x64": "b765daec9fda475b031b5a5159798cbe4294a3f2a50683cbc0471226e376d3da",
 }
-MINGIT_VERSION = "2.56.0.windows.2"
+MINGIT_VERSION = "2.56.0.windows.4"
 MINGIT_HASHES = {
-    "arm64": "38b33dc6024026e3315cf88ab2cfea65205bbd7bb3a8e824bd21c8ad4fe609a7",
-    "x64": "da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be",
+    "arm64": "70f7649f78088c1db1d2f3571ca46a04d5bef06e4e9d56d8ed7f9829e8c6c4db",
+    "x64": "e3bf78351fe777fba47ddee5950082f8a98bb0f02604fdc7ba3ee2cb68ffa877"
 }
 PIN = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9,._-]+\])?"
