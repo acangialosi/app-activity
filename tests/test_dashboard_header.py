@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -19,6 +21,18 @@ def css_rule(selector: str, source: str = HTML) -> dict[str, str]:
     if match is None:
         raise AssertionError(f"Missing CSS rule: {selector}")
     return dict(declaration.split(":", 1) for declaration in match[1].split(";") if declaration)
+
+
+def chromium_browser() -> str | None:
+    for name in ("msedge", "chromium", "chromium-browser", "google-chrome"):
+        if browser := shutil.which(name):
+            return browser
+    for variable in ("PROGRAMFILES(X86)", "PROGRAMFILES"):
+        if directory := os.environ.get(variable):
+            browser = Path(directory) / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+            if browser.is_file():
+                return str(browser)
+    return None
 
 
 class HeaderParser(HTMLParser):
@@ -44,6 +58,85 @@ class HeaderParser(HTMLParser):
 
 
 class HeaderTests(unittest.TestCase):
+    @unittest.skipUnless(chromium_browser(), "A Chromium browser is required for layout tests")
+    def test_navigation_width_does_not_depend_on_report_label(self) -> None:
+        labels = {}
+        for period in ("hour", "day", "week", "month", "year"):
+            labels[period] = []
+            for now in (
+                datetime(2026, 10, 22, 11, tzinfo=timezone.utc),
+                datetime(2026, 10, 23, 12, tzinfo=timezone.utc),
+                datetime(2026, 9, 30, 23, tzinfo=timezone.utc),
+                datetime(2026, 5, 1, 0, tzinfo=timezone.utc),
+            ):
+                start, end, _ = _period_bounds(period, now, 0)
+                labels[period].append(_period_label(period, start, end))
+        page = re.sub(r"<script>.*?</script>", "", HTML, flags=re.DOTALL)
+        script = r"""
+const page = PAGE, labels = LABELS;
+const results = [];
+async function check() {
+    for (const width of [1280, 900, 751, 750, 375, 320]) {
+        const frame = document.createElement("iframe");
+        frame.style.cssText = `width:${width}px;height:900px;border:0`;
+        const ready = new Promise(resolve => frame.onload = resolve);
+        frame.srcdoc = page;
+        document.body.appendChild(frame);
+        await ready;
+        const doc = frame.contentDocument;
+        const periods = doc.getElementById("periods");
+        for (const name of Object.keys(labels)) {
+            const button = doc.createElement("button");
+            button.textContent = name[0].toUpperCase() + name.slice(1);
+            periods.appendChild(button);
+        }
+        for (const [period, values] of Object.entries(labels)) {
+            doc.getElementById("currentPeriod").textContent =
+                period === "day" ? "Today" : `This ${period}`;
+            let baseline;
+            for (const value of ["Loading...", ...values]) {
+                doc.getElementById("label").textContent = value;
+                const bounds = [...doc.querySelectorAll(
+                    ".header-controls,.report-nav,.report-label,#previousPeriod,#nextPeriod,#currentPeriod,#settingsSummary,#periods,#periods button"
+                )].map(element => {
+                    const rect = element.getBoundingClientRect();
+                    return [rect.x, rect.width];
+                });
+                if (!baseline) baseline = bounds;
+                if (JSON.stringify(bounds) !== JSON.stringify(baseline))
+                    throw new Error(`${width}px ${period}: controls shifted for ${value}: ${JSON.stringify(bounds)} != ${JSON.stringify(baseline)}`);
+                if (doc.documentElement.scrollWidth > width)
+                    throw new Error(`${width}px ${period}: horizontal overflow`);
+            }
+        }
+        frame.remove();
+        results.push(width);
+    }
+}
+check().then(() => document.getElementById("result").textContent = JSON.stringify(results))
+    .catch(error => document.getElementById("result").textContent = error.message);
+"""
+        script = script.replace("PAGE", json.dumps(page)).replace("LABELS", json.dumps(labels))
+        with tempfile.TemporaryDirectory(prefix="app-activity-layout-") as directory:
+            fixture = Path(directory) / "layout.html"
+            fixture.write_text(
+                '<!doctype html><pre id="result">pending</pre><script>' + script + "</script>",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    chromium_browser(), "--headless", "--disable-gpu",
+                    "--no-first-run", "--disable-extensions",
+                    f"--user-data-dir={Path(directory) / 'profile'}",
+                    "--dump-dom", "--virtual-time-budget=10000", fixture.as_uri(),
+                ],
+                capture_output=True, text=True, encoding="utf-8", timeout=45,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            match = re.search(r'<pre id="result">(.*?)</pre>', result.stdout, re.DOTALL)
+            self.assertIsNotNone(match, result.stderr)
+            self.assertEqual(match[1], "[1280,900,751,750,375,320]")
+
     def test_navigation_and_segmented_periods_share_right_header_group(self) -> None:
         parser = HeaderParser()
         parser.feed(HTML)
