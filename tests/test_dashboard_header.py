@@ -59,7 +59,7 @@ class HeaderParser(HTMLParser):
 
 class HeaderTests(unittest.TestCase):
     @unittest.skipUnless(chromium_browser(), "A Chromium browser is required for layout tests")
-    def test_navigation_width_does_not_depend_on_report_label(self) -> None:
+    def test_navigation_stays_compact_right_aligned_and_stable_across_labels(self) -> None:
         labels = {}
         for period in ("hour", "day", "week", "month", "year"):
             labels[period] = []
@@ -107,6 +107,14 @@ async function check() {
                     throw new Error(`${width}px ${period}: controls shifted for ${value}: ${JSON.stringify(bounds)} != ${JSON.stringify(baseline)}`);
                 if (doc.documentElement.scrollWidth > width)
                     throw new Error(`${width}px ${period}: horizontal overflow`);
+                if (width > 750) {
+                    const header = doc.querySelector("header").getBoundingClientRect();
+                    const controls = doc.querySelector(".header-controls").getBoundingClientRect();
+                    if (Math.abs(controls.right - header.right) > 1)
+                        throw new Error(`${width}px ${period}: controls are not right aligned`);
+                    if (controls.width > 540)
+                        throw new Error(`${width}px ${period}: controls stretch beyond the compact desktop width (${controls.width}px)`);
+                }
             }
         }
         frame.remove();
