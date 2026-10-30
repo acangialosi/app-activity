@@ -71,10 +71,6 @@ class HeaderTests(unittest.TestCase):
             ):
                 start, end, _ = _period_bounds(period, now, 0)
                 labels[period].append(_period_label(period, start, end))
-        page = re.sub(
-            r"<script\b[^>]*>.*?</script\s*>", "", HTML,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
         script = r"""
 const page = PAGE, labels = LABELS;
 const results = [];
@@ -82,6 +78,7 @@ async function check() {
     for (const width of [1280, 900, 751, 750, 375, 320]) {
         const frame = document.createElement("iframe");
         frame.style.cssText = `width:${width}px;height:900px;border:0`;
+        frame.setAttribute("sandbox", "allow-same-origin");
         const ready = new Promise(resolve => frame.onload = resolve);
         frame.srcdoc = page;
         document.body.appendChild(frame);
@@ -119,7 +116,8 @@ async function check() {
 check().then(() => document.getElementById("result").textContent = JSON.stringify(results))
     .catch(error => document.getElementById("result").textContent = error.message);
 """
-        script = script.replace("PAGE", json.dumps(page)).replace("LABELS", json.dumps(labels))
+        page = json.dumps(HTML).replace("<", r"\u003c")
+        script = script.replace("PAGE", page).replace("LABELS", json.dumps(labels))
         with tempfile.TemporaryDirectory(prefix="app-activity-layout-") as directory:
             fixture = Path(directory) / "layout.html"
             fixture.write_text(
