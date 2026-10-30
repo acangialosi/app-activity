@@ -71,7 +71,10 @@ class HeaderTests(unittest.TestCase):
             ):
                 start, end, _ = _period_bounds(period, now, 0)
                 labels[period].append(_period_label(period, start, end))
-        page = re.sub(r"<script>.*?</script>", "", HTML, flags=re.DOTALL)
+        page = re.sub(
+            r"<script\b[^>]*>.*?</script\s*>", "", HTML,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
         script = r"""
 const page = PAGE, labels = LABELS;
 const results = [];
