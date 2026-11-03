@@ -533,24 +533,27 @@ def _period_bounds(
     reference = now.tzinfo
     if period == "hour":
         # Step in absolute time so repeated and skipped clock hours stay
-        # distinct, then show the hour with its own UTC offset.
+        # distinct, then show each boundary with its own UTC offset.
         start = _localize(
             now.replace(minute=0, second=0, microsecond=0)
             + timedelta(hours=offset),
             reference,
         )
-        end = start + timedelta(hours=1)
-        buckets = [
-            {
-                "start": start + timedelta(minutes=minute),
-                "end": start + timedelta(minutes=minute + 5),
-                "label": (
-                    start + timedelta(minutes=minute)
-                ).strftime("%H:%M"),
-            }
-            for minute in range(0, 60, 5)
-        ]
-        return start, end, buckets
+        buckets = []
+        for minute in range(0, 60, 5):
+            bucket_start = _localize(
+                start + timedelta(minutes=minute), reference
+            )
+            buckets.append(
+                {
+                    "start": bucket_start,
+                    "end": _localize(
+                        start + timedelta(minutes=minute + 5), reference
+                    ),
+                    "label": bucket_start.strftime("%H:%M"),
+                }
+            )
+        return start, _localize(start + timedelta(hours=1), reference), buckets
     # Other periods follow local wall-clock dates, and each boundary gets its
     # own UTC offset, so a day lasts 23 or 25 hours when DST starts or ends.
     now = now.replace(tzinfo=None)

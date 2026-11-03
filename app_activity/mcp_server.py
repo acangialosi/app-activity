@@ -183,20 +183,21 @@ class _Server:
     def handle_message(self, message: Any) -> dict[str, Any] | None:
         if not isinstance(message, dict):
             return _error_response(None, INVALID_REQUEST, "Invalid Request")
+        request_id = message.get("id")
+        usable_id = request_id if _is_valid_id(request_id) else None
         if "method" not in message:
             if "result" in message or "error" in message:
                 return None
-            request_id = message.get("id")
-            usable_id = request_id if _is_valid_id(request_id) else None
+            return _error_response(usable_id, INVALID_REQUEST, "Invalid Request")
+        method = message["method"]
+        # Validate the envelope first: a malformed message without an id is
+        # an invalid request, not a notification, so it still gets an error.
+        if message.get("jsonrpc") != "2.0" or not isinstance(method, str):
             return _error_response(usable_id, INVALID_REQUEST, "Invalid Request")
         if "id" not in message:
             return None
-        request_id = message["id"]
         if not _is_valid_id(request_id):
             return _error_response(None, INVALID_REQUEST, "Invalid Request")
-        method = message["method"]
-        if message.get("jsonrpc") != "2.0" or not isinstance(method, str):
-            return _error_response(request_id, INVALID_REQUEST, "Invalid Request")
         try:
             result = self._dispatch(method, message.get("params"))
         except _RpcError as error:

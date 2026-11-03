@@ -330,12 +330,29 @@ class JsonRpcTests(ServerTestCase):
                 notification("notifications/cancelled", {"requestId": 1, "reason": "x"}),
                 notification("notifications/unknown"),
                 notification("tools/call", {"name": "echo"}),
-                {"jsonrpc": "1.0", "method": 5},
             ),
             call_tool=call_tool,
         )
 
         self.assertEqual(b"", output)
+        call_tool.assert_not_called()
+
+    def test_malformed_messages_without_ids_are_invalid_requests(self) -> None:
+        call_tool = Mock(return_value={})
+
+        output = self.run_server(
+            encode(
+                {"jsonrpc": "2.0", "method": 5},
+                {"jsonrpc": "1.0", "method": "ping"},
+                {"method": "notifications/initialized"},
+            ),
+            call_tool=call_tool,
+        )
+
+        responses = self.parse_output(output)
+        self.assertEqual(3, len(responses))
+        for response in responses:
+            self.assert_error(response, -32600, None)
         call_tool.assert_not_called()
 
     def test_client_responses_are_ignored(self) -> None:

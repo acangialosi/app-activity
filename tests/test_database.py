@@ -761,10 +761,44 @@ class DaylightSavingTimeReportTests(unittest.TestCase):
             [report["start"] for report in reports],
         )
         self.assertEqual(
+            [
+                "2026-11-01T02:00:00-08:00",
+                "2026-11-01T01:00:00-08:00",
+                "2026-11-01T01:00:00-07:00",
+            ],
+            [report["end"] for report in reports],
+        )
+        self.assertEqual(
             [0, 600, 0], [report["active_seconds"] for report in reports]
         )
-        self.assertIn("1:00 AM - 2:00 AM", reports[1]["label"])
-        self.assertEqual("01:00", reports[1]["timeline"][0]["label"])
+        self.assertIn("1:00 AM - 1:00 AM", reports[1]["label"])
+        repeated = reports[1]["timeline"]
+        self.assertEqual("01:00", repeated[0]["label"])
+        self.assertEqual(
+            ("2026-11-01T01:55:00-07:00", "2026-11-01T01:00:00-08:00"),
+            (repeated[-1]["start"], repeated[-1]["end"]),
+        )
+
+    def test_hour_before_clocks_spring_forward_ends_at_local_time(
+        self,
+    ) -> None:
+        report = self.database.report(
+            "hour", datetime(2026, 3, 8, 3, 30, tzinfo=PDT), offset=-1
+        )
+
+        self.assertEqual(
+            ("2026-03-08T01:00:00-08:00", "2026-03-08T03:00:00-07:00"),
+            (report["start"], report["end"]),
+        )
+        self.assertIn("1:00 AM - 3:00 AM", report["label"])
+        self.assertEqual(
+            3600,
+            sum(bucket["capacity_seconds"] for bucket in report["timeline"]),
+        )
+        self.assertEqual(
+            ("01:55", "2026-03-08T03:00:00-07:00"),
+            (report["timeline"][-1]["label"], report["timeline"][-1]["end"]),
+        )
 
 
 if __name__ == "__main__":
