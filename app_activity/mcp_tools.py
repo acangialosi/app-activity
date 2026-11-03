@@ -380,14 +380,15 @@ def _summary(
 def _segments(
     values: dict[str, Any], database_path: Path, now: datetime
 ) -> dict[str, Any]:
-    start = _range_bound("start", values["start"], end_of_day=False)
-    end = _range_bound("end", values["end"], end_of_day=True)
+    start, start_clock = _range_bound(
+        "start", values["start"], end_of_day=False
+    )
+    end, end_clock = _range_bound("end", values["end"], end_of_day=True)
     if end <= start:
         raise ToolError("end must be after start.")
-    # Compare wall-clock times so a DST change cannot push a range of whole
-    # days over the limit.
-    span = end.replace(tzinfo=None) - start.replace(tzinfo=None)
-    if span > timedelta(days=_MAX_RANGE_DAYS):
+    # Compare the requested wall-clock times so a DST change cannot push a
+    # range of whole days over the limit.
+    if end_clock - start_clock > timedelta(days=_MAX_RANGE_DAYS):
         raise ToolError(
             f"The range can cover at most {_MAX_RANGE_DAYS} days. Split it "
             "into smaller ranges, or use get_activity_summary for totals."
@@ -482,34 +483,50 @@ def _database_error(error: sqlite3.Error) -> ToolError:
     )
 
 
-def _range_bound(name: str, text: str, *, end_of_day: bool) -> datetime:
-    moment = _parse_moment(name, text)
-    if isinstance(moment, datetime):
-        return moment
-    if end_of_day:
-        try:
-            moment += timedelta(days=1)
-        except OverflowError:
-            raise ToolError(
-                f"{name} is outside the supported date range."
-            ) from None
-    return _local(name, datetime.combine(moment, time.min))
+def _range_bound(
+    name: str, text: str, *, end_of_day: bool
+) -> tuple[datetime, datetime]:
+    """Return the local bound and the wall-clock time that was requested.
+
+    Localizing moves a skipped time forward, such as midnight where DST starts
+    at 00:00, so range limits use the requested time instead.
+    """
+    moment = _parse_input(name, text)
+    if not isinstance(moment, datetime):
+        if end_of_day:
+            try:
+                moment += timedelta(days=1)
+            except OverflowError:
+                raise ToolError(
+                    f"{name} is outside the supported date range."
+                ) from None
+        moment = datetime.combine(moment, time.min)
+    bound = _local(name, moment)
+    if moment.tzinfo is None:
+        return bound, moment
+    return bound, bound.replace(tzinfo=None)
 
 
 def _parse_moment(name: str, text: str) -> date | datetime:
+    moment = _parse_input(name, text)
+    if isinstance(moment, datetime):
+        return _local(name, moment)
+    return moment
+
+
+def _parse_input(name: str, text: str) -> date | datetime:
     text = text.strip()
     try:
         return date.fromisoformat(text)
     except ValueError:
         pass
     try:
-        moment = datetime.fromisoformat(text)
+        return datetime.fromisoformat(text)
     except ValueError:
         raise ToolError(
             f"{name} must be a local date (YYYY-MM-DD) or date-time "
             f"(YYYY-MM-DDTHH:MM[:SS]); got {_shorten(text)!r}."
         ) from None
-    return _local(name, moment)
 
 
 def _local(name: str, moment: datetime) -> datetime:

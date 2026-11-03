@@ -42,6 +42,22 @@ SAMPLE_VALUES: dict[str, Any] = {
 }
 
 
+CUBA_STANDARD = timezone(timedelta(hours=-5), "CST")
+CUBA_DAYLIGHT = timezone(timedelta(hours=-4), "CDT")
+
+
+def havana_time(name: str, moment: datetime) -> datetime:
+    """Mimic astimezone() where clocks skip 00:00-01:00 on 2026-03-08."""
+    if moment.tzinfo is None:
+        # Skipped times use the offset before the change, then move forward.
+        daylight = moment >= datetime(2026, 3, 8, 1)
+        moment = moment.replace(
+            tzinfo=CUBA_DAYLIGHT if daylight else CUBA_STANDARD
+        )
+    daylight = moment >= datetime(2026, 3, 8, 5, tzinfo=timezone.utc)
+    return moment.astimezone(CUBA_DAYLIGHT if daylight else CUBA_STANDARD)
+
+
 def local(text: str) -> datetime:
     return datetime.fromisoformat(text).astimezone()
 
@@ -512,6 +528,32 @@ class SegmentsToolTests(McpToolsTestCase):
                     {"start": start, "end": end},
                     "at most 31 days",
                 )
+
+    def test_range_limit_uses_requested_times_when_dst_skips_midnight(
+        self,
+    ) -> None:
+        with mock.patch("app_activity.mcp_tools._local", havana_time):
+            for start, end in (
+                ("2026-02-05", "2026-03-07"),
+                ("2026-02-05T00:00", "2026-03-08T00:00"),
+            ):
+                with self.subTest(start=start, end=end):
+                    result = self.call(
+                        "get_activity_segments", {"start": start, "end": end}
+                    )
+                    self.assertEqual(
+                        (
+                            "2026-02-05T00:00:00-05:00",
+                            "2026-03-08T01:00:00-04:00",
+                        ),
+                        (result["start"], result["end"]),
+                    )
+
+            self.assert_tool_error(
+                "get_activity_segments",
+                {"start": "2026-02-05T00:00", "end": "2026-03-08T00:01"},
+                "at most 31 days",
+            )
 
     def test_end_must_be_after_start(self) -> None:
         for start, end in (
