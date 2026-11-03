@@ -1,0 +1,45 @@
+name: Dependency remediation feedback
+
+# Asks Copilot cloud agent to fix failed checks on Copilot and Dependabot pull requests for open dependency remediation issues.
+# It reads check results through the API; it never checks out or runs pull request code.
+on:
+  workflow_run:
+    workflows:
+      - Security
+      - Windows installer
+    types: [completed]
+    branches:
+      - "dependabot/**"
+      - "copilot/**"
+
+permissions: {}
+
+jobs:
+  feedback:
+    if: >-
+      github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.conclusion != 'cancelled'
+      && github.event.workflow_run.conclusion != 'action_required'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Share the remediation workflow's queue, so its Dependabot review and these runs never request the same fix twice.
+    concurrency:
+      group: dependency-remediation
+      queue: max
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14"
+      - name: Ask Copilot cloud agent to fix failed checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COPILOT_REMEDIATION_TOKEN: ${{ secrets.COPILOT_REMEDIATION_TOKEN }}
+        run: python -m tools.dependency_remediation feedback

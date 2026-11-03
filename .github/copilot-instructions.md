@@ -41,6 +41,15 @@
 - Use the repository's Windows CI for platform-specific validation and packaged
   builds. Explicitly report any interactive Windows desktop checks that could
   not be performed.
+- Copilot cloud agent works on Ubuntu, prepared by
+  `.github/workflows/copilot-setup-steps.yml`. Most test modules need Windows,
+  so run the platform-independent modules there instead of the full suite:
+
+  ```bash
+  python -m unittest tests.test_dashboard tests.test_dashboard_export tests.test_dashboard_feedback tests.test_dashboard_filter_status tests.test_database tests.test_dependency_remediation tests.test_mcp_server tests.test_security_tool_updates tests.test_updates -v
+  ```
+
+  The pull request's Windows checks are authoritative for everything else.
 - Documentation-only changes do not require a local test-suite run, but check
   changed links or assets where applicable and wait for required CI checks.
 - Never claim validation that was not performed, weaken tests to obtain a

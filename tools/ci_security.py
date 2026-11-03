@@ -39,6 +39,12 @@ class SecurityError(Exception):
     pass
 
 
+class VulnerabilityError(SecurityError):
+    def __init__(self, message: str, findings: list[dict]) -> None:
+        super().__init__(message)
+        self.findings = findings
+
+
 def run(
     command: list[str], *, cwd: Path, input: str | None = None,
     env: dict[str, str] | None = None, timeout: int = 300,
@@ -343,19 +349,22 @@ def inspect_audit(result: subprocess.CompletedProcess[str]) -> int:
     dependencies = document["dependencies"]
     if not dependencies:
         raise SecurityError("Dependency audit returned no packages; coverage is incomplete.")
-    found = False
+    findings = []
     for package in dependencies:
         if package.get("skip_reason") or not isinstance(package.get("vulns"), list):
             raise SecurityError("A dependency could not be audited; coverage is incomplete.")
         for vulnerability in package["vulns"]:
-            found = True
-            print(json.dumps({
+            finding = {
                 "package": package.get("name"), "version": package.get("version"),
                 "advisory": vulnerability.get("id"),
                 "fix_versions": vulnerability.get("fix_versions"),
-            }))
-    if found:
-        raise SecurityError("Known dependency vulnerabilities found; review and update affected pins explicitly.")
+            }
+            print(json.dumps(finding))
+            findings.append({**finding, "aliases": vulnerability.get("aliases", [])})
+    if findings:
+        raise VulnerabilityError(
+            "Known dependency vulnerabilities found; review and update affected pins explicitly.", findings,
+        )
     if result.returncode:
         raise SecurityError(f"Dependency audit failed (exit {result.returncode}); no successful result was accepted.")
     return len(dependencies)
@@ -394,33 +403,73 @@ def audit_dependencies(repo: Path, revisions: list[str]) -> None:
             )
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Security checks for GitHub Actions runners.")
-    parser.add_argument(
-        "command", choices=("setup-secrets", "setup-dependencies", "secrets", "dependencies"),
-    )
-    args = parser.parse_args()
+def write_report(path: Path, report: dict) -> bool:
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    document = {
+        "schema": 1,
+        "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "attempt": int(attempt) if re.fullmatch(r"[1-9][0-9]{0,8}", attempt) else None,
+        "revision": report["revision"],
+        "status": report["status"],
+        "findings": report["findings"],
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    except (OSError, TypeError, ValueError):
+        print("SECURITY CHECK FAILED: the dependency findings report could not be written.", file=sys.stderr)
+        return False
+    return True
+
+
+def execute(command: str, report: dict) -> int:
     try:
         if os.environ.get("GITHUB_ACTIONS") != "true" or not os.environ.get("RUNNER_TEMP"):
             raise SecurityError("This helper runs in GitHub Actions; no local security setup is required.")
-        if args.command == "setup-secrets":
+        if command == "setup-secrets":
             setup_secrets()
             return 0
-        if args.command == "setup-dependencies":
+        if command == "setup-dependencies":
             setup_dependencies()
             return 0
         repo = repository()
-        if args.command == "secrets":
+        if command == "secrets":
             scan_secrets(repo, ["--all HEAD"])
         else:
-            audit_dependencies(repo, [git(repo, "rev-parse", "HEAD")])
+            report["revision"] = git(repo, "rev-parse", "HEAD")
+            audit_dependencies(repo, [report["revision"]])
+            report["status"] = "clean"
     except (SecurityError, OSError, zipfile.BadZipFile) as error:
+        if isinstance(error, VulnerabilityError):
+            report.update(status="vulnerable", findings=error.findings)
         if isinstance(error, SecurityError):
             print(f"SECURITY CHECK FAILED: {error}", file=sys.stderr)
         else:
             print("SECURITY CHECK FAILED: local tool or file operation failed; check setup and permissions.", file=sys.stderr)
         return 1
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Security checks for GitHub Actions runners.")
+    parser.add_argument(
+        "command", choices=("setup-secrets", "setup-dependencies", "secrets", "dependencies"),
+    )
+    parser.add_argument(
+        "--report", type=Path,
+        help="write a JSON summary of the dependency audit (dependencies command only)",
+    )
+    args = parser.parse_args()
+    if args.report is not None and args.command != "dependencies":
+        parser.error("--report can only be used with the dependencies command")
+    report = {"revision": None, "status": "error", "findings": []}
+    code = 1
+    try:
+        code = execute(args.command, report)
+    finally:
+        if args.report is not None and not write_report(args.report, report):
+            code = 1
+    return code
 
 
 if __name__ == "__main__":
