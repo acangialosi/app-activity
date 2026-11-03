@@ -20,9 +20,10 @@ SECURITY_WORKFLOW = ".github/workflows/security.yml"
 INSTALLER_WORKFLOW = ".github/workflows/windows-installer.yml"
 WORKFLOW_NAMES = {SECURITY_WORKFLOW: "Security", INSTALLER_WORKFLOW: "Windows installer"}
 EXPECTED_PYTHONS = ("3.11", "3.12", "3.13", "3.14")
+AUDIT_JOB = "security-dependencies ({})"
 ARTIFACT_PREFIX = "dependency-findings-"
 REPORT_NAME = "findings.json"
-REPORT_KEYS = frozenset(("schema", "python", "revision", "status", "findings"))
+REPORT_KEYS = frozenset(("schema", "python", "attempt", "revision", "status", "findings"))
 FINDING_KEYS = frozenset(("package", "version", "advisory", "fix_versions", "aliases"))
 LABEL = "dependency-remediation"
 ISSUE_AUTHOR = "github-actions[bot]"
@@ -334,6 +335,7 @@ def load_reports(github: GitHub, repo: str, run_id: int, head: str) -> dict[str,
         python = name[len(ARTIFACT_PREFIX):]
         if python in EXPECTED_PYTHONS and (python not in latest or identifier > latest[python]["id"]):
             latest[python] = artifact
+    attempts = audit_attempts(github, repo, run_id)
     reports: dict[str, dict | None] = {}
     for python in EXPECTED_PYTHONS:
         artifact = latest.get(python)
@@ -341,12 +343,36 @@ def load_reports(github: GitHub, repo: str, run_id: int, head: str) -> dict[str,
             note(f"The Python {python} dependency findings report is missing or expired.", warning=True)
             reports[python] = None
             continue
+        if python not in attempts:
+            raise RemediationError(f"Security run {run_id} has no `{AUDIT_JOB.format(python)}` job.")
         size = artifact.get("size_in_bytes")
         if type(size) is not int or not 0 < size <= MAX_ARTIFACT_BYTES:
             raise RemediationError(f"The Python {python} findings artifact has an unexpected size.")
         data = github.request("GET", f"repos/{repo}/actions/artifacts/{artifact['id']}/zip")
-        reports[python] = parse_report(read_artifact(data, python), python, head)
+        report = parse_report(read_artifact(data, python), python, head)
+        # A rerun whose audit never wrote a report leaves the earlier attempt's artifact in place.
+        if report["attempt"] != attempts[python]:
+            note(
+                f"The Python {python} dependency findings report is from an earlier attempt of Security run "
+                f"{run_id}; its latest audit did not replace it.",
+                warning=True,
+            )
+            report = None
+        reports[python] = report
     return reports
+
+
+def audit_attempts(github: GitHub, repo: str, run_id: int) -> dict[str, int]:
+    names = {AUDIT_JOB.format(python): python for python in EXPECTED_PYTHONS}
+    attempts: dict[str, int] = {}
+    # Jobs from every attempt are listed, because re-running only failed jobs keeps the jobs that passed earlier.
+    for job in github.pages(f"repos/{repo}/actions/runs/{run_id}/jobs?filter=all", "jobs"):
+        name = job.get("name")
+        attempt = job.get("run_attempt")
+        python = names.get(name) if isinstance(name, str) else None
+        if python is not None and type(attempt) is int and attempt > attempts.get(python, 0):
+            attempts[python] = attempt
+    return attempts
 
 
 def read_artifact(data: bytes, python: str) -> bytes:
@@ -375,10 +401,12 @@ def parse_report(content: bytes, python: str, head: str) -> dict:
         raise RemediationError(failure) from error
     if not isinstance(document, dict) or set(document) != REPORT_KEYS:
         raise RemediationError(failure)
+    attempt = document["attempt"]
     status = document["status"]
     findings = document["findings"]
     if (
         type(document["schema"]) is not int or document["schema"] != 1 or document["python"] != python
+        or type(attempt) is not int or attempt < 1
         or not one_of(status, ("clean", "vulnerable", "error")) or not isinstance(findings, list)
         or bool(findings) != (status == "vulnerable")
     ):
@@ -402,7 +430,7 @@ def parse_report(content: bytes, python: str, head: str) -> dict:
             "fix_versions": entries(finding["fix_versions"]),
             "aliases": entries(finding["aliases"], exclude=finding["advisory"]),
         })
-    return {"status": status, "findings": parsed}
+    return {"attempt": attempt, "status": status, "findings": parsed}
 
 
 def aggregate(reports: dict[str, dict | None]) -> tuple[list[dict], list[str]]:

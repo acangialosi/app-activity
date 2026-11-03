@@ -68,11 +68,12 @@ unsupported manifests, and malformed reports fail the job. The audit never
 upgrades dependencies or suppresses advisories; fixes arrive as reviewed pull
 requests (see [Automatic dependency remediation](#automatic-dependency-remediation)).
 
-Each dependency job also writes a findings report with the audited commit, a
-`clean`, `vulnerable`, or `error` status, and each finding's package, installed
-version, advisory ID, aliases, and fixed versions. Runs other than pull request
-checks upload it as the `dependency-findings-<python>` artifact for 14 days.
-The report contains no repository contents, scanner output, or secrets.
+Each dependency job also writes a findings report with the audited commit, the
+run attempt that wrote it, a `clean`, `vulnerable`, or `error` status, and each
+finding's package, installed version, advisory ID, aliases, and fixed versions.
+Runs other than pull request checks upload it as the
+`dependency-findings-<python>` artifact for 14 days. The report contains no
+repository contents, scanner output, or secrets.
 
 Package names and versions are sent to PyPI for resolution and advisory
 queries; repository contents and secrets are not. Dependency review is not
@@ -113,10 +114,13 @@ skipped, so only reviewed code on `main` can use the remediation token.
 - **A clean audit** on all four Python versions comments on and closes open
   remediation issues as completed.
 - **An incomplete audit**, where a report is missing, expired, or records a
-  failed audit, never closes issues. Any findings it does report are still
-  tracked, and the issue notes that the list may be partial. A malformed
-  report, including a single malformed finding, fails the workflow run instead
-  of replacing the tracked findings with a partial list.
+  failed audit, never closes issues. A report counts only if the newest run of
+  its `security-dependencies (<python>)` job wrote it, so when a re-run job
+  cannot write a report, the earlier attempt's report counts as missing. Any
+  findings an incomplete audit does report are still tracked, and the issue
+  notes that the list may be partial. A malformed report, including a single
+  malformed finding, fails the workflow run instead of replacing the tracked
+  findings with a partial list.
 
 The `Dependency remediation feedback` workflow catches bugs that an upgrade
 causes elsewhere in the code. It runs when the `Security` or

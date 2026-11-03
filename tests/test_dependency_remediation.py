@@ -25,6 +25,7 @@ ADVISORY = "GHSA-9wx4-h78v-vm56"
 PYTHONS = remediation.EXPECTED_PYTHONS
 ISSUES = f"repos/{REPO}/issues?" + urllib.parse.urlencode({"labels": remediation.LABEL, "state": "all"})
 PULLS = f"repos/{REPO}/pulls?state=open&base=main"
+AUDIT_JOBS = f"repos/{REPO}/actions/runs/{RUN_ID}/jobs?filter=all"
 
 
 def finding(package: str = "Requests", fix_versions: tuple[str, ...] = ("2.32.0",), **values: object) -> dict:
@@ -36,10 +37,15 @@ def finding(package: str = "Requests", fix_versions: tuple[str, ...] = ("2.32.0"
     return document
 
 
-def report(python: str, status: str = "vulnerable", findings: list | None = None, revision: str | None = HEAD) -> dict:
+def report(
+    python: str, status: str = "vulnerable", findings: list | None = None,
+    revision: str | None = HEAD, attempt: int = 1,
+) -> dict:
     if findings is None:
         findings = [finding()] if status == "vulnerable" else []
-    return {"schema": 1, "python": python, "revision": revision, "status": status, "findings": findings}
+    return {
+        "schema": 1, "python": python, "attempt": attempt, "revision": revision, "status": status, "findings": findings,
+    }
 
 
 def archive(content: dict | bytes, *names: str) -> bytes:
@@ -139,7 +145,7 @@ class ReportTests(unittest.TestCase):
             finding("requests", releases),
         ])
         parsed = remediation.parse_report(json.dumps(document).encode("utf-8"), "3.12", HEAD)
-        self.assertEqual(parsed, {"status": "vulnerable", "findings": [{
+        self.assertEqual(parsed, {"attempt": 1, "status": "vulnerable", "findings": [{
             "package": "requests-toolbelt", "version": "2.31.0", "advisory": ADVISORY,
             "fix_versions": ["2.0.0", "10.0"], "aliases": ["CVE-1"],
         }, {
@@ -154,6 +160,9 @@ class ReportTests(unittest.TestCase):
             "clean with findings": report("3.11", "clean", [finding()]),
             "wrong Python": report("3.12"),
             "boolean schema": {**report("3.11"), "schema": True},
+            "missing attempt": {key: value for key, value in report("3.11").items() if key != "attempt"},
+            "boolean attempt": report("3.11", attempt=True),
+            "zero attempt": report("3.11", attempt=0),
             "extra key": {**report("3.11"), "extra": 1},
             "malformed package": report("3.11", findings=[finding(), finding("bad package!")]),
             "malformed version": report("3.11", findings=[finding(version="bad version")]),
@@ -167,8 +176,10 @@ class ReportTests(unittest.TestCase):
             with self.subTest(name), contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaises(remediation.RemediationError):
                     remediation.parse_report(json.dumps(document).encode("utf-8"), "3.11", HEAD)
-        parsed = remediation.parse_report(json.dumps(report("3.11", "error", revision=None)).encode(), "3.11", HEAD)
-        self.assertEqual(parsed, {"status": "error", "findings": []})
+        parsed = remediation.parse_report(
+            json.dumps(report("3.11", "error", revision=None, attempt=2)).encode(), "3.11", HEAD,
+        )
+        self.assertEqual(parsed, {"attempt": 2, "status": "error", "findings": []})
 
     def test_read_artifact_requires_one_bounded_report(self) -> None:
         self.assertEqual(remediation.read_artifact(archive(b"{}"), "3.11"), b"{}")
@@ -246,7 +257,9 @@ def base_routes() -> dict:
     }
 
 
-def audit_routes(documents: dict | None = None, run: dict | None = None, issues: list | None = None) -> dict:
+def audit_routes(
+    documents: dict | None = None, run: dict | None = None, issues: list | None = None, jobs: dict | None = None,
+) -> dict:
     routes = base_routes()
     routes[("GET", f"repos/{REPO}/actions/runs/{RUN_ID}")] = run or security_run()
     routes[("GET", ISSUES)] = issues or []
@@ -262,6 +275,12 @@ def audit_routes(documents: dict | None = None, run: dict | None = None, issues:
         })
         routes[("GET", f"repos/{REPO}/actions/artifacts/{identifier}/zip")] = data
     routes[("GET", f"repos/{REPO}/actions/runs/{RUN_ID}/artifacts")] = {"artifacts": artifacts}
+    # Each Python's audit job is listed once for every run attempt in which it executed.
+    executions = jobs if jobs is not None else {python: (1,) for python in PYTHONS}
+    routes[("GET", AUDIT_JOBS)] = {"jobs": [
+        {"name": remediation.AUDIT_JOB.format(python), "run_attempt": attempt}
+        for python, attempts in executions.items() for attempt in attempts
+    ]}
     return routes
 
 
@@ -462,6 +481,41 @@ class RemediateTests(WorkflowFixture):
         self.assertEqual(changes(github), [])
         self.assertIn("::warning::The Python 3.14 dependency findings report is missing or expired.", output)
         self.assertIn("::warning::The dependency audit is incomplete for Python 3.13, 3.14;", output)
+
+    def test_reports_left_by_earlier_run_attempts_count_as_missing(self) -> None:
+        # The rerun's Python 3.11 audit failed before writing a report, so the first attempt's clean report remains.
+        documents = {python: report(python, "clean", attempt=1 if python == "3.11" else 2) for python in PYTHONS}
+        routes = audit_routes(documents, issues=[tracked_issue()], jobs={python: (1, 2) for python in PYTHONS})
+        routes[("GET", AUDIT_JOBS)]["jobs"] += [
+            {"name": "security-secrets", "run_attempt": 3},
+            {"name": remediation.AUDIT_JOB.format("3.12"), "run_attempt": "3"},
+        ]
+        github = FakeGitHub(routes)
+        output = self.run_command(remediation.remediate, github)
+        self.assertEqual(changes(github), [])
+        self.assertIn("::warning::The Python 3.11 dependency findings report is from an earlier attempt", output)
+        self.assertIn("::warning::The dependency audit is incomplete for Python 3.11;", output)
+
+    def test_reruns_of_failed_jobs_keep_the_reports_of_jobs_that_were_not_rerun(self) -> None:
+        documents = {python: report(python, "clean", attempt=2 if python == "3.11" else 1) for python in PYTHONS}
+        jobs = {python: (1, 2) if python == "3.11" else (1,) for python in PYTHONS}
+        routes = audit_routes(documents, issues=[tracked_issue()], jobs=jobs)
+        routes.update({("POST", f"repos/{REPO}/issues/5/comments"): {}, ("PATCH", f"repos/{REPO}/issues/5"): {}})
+        github = FakeGitHub(routes)
+        self.run_command(remediation.remediate, github)
+        closed = {"state": "closed", "state_reason": "completed"}
+        self.assertEqual(github.sent("PATCH"), [(f"repos/{REPO}/issues/5", closed, False)])
+
+    def test_reports_require_their_audit_job(self) -> None:
+        github = FakeGitHub(audit_routes(jobs={python: (1,) for python in PYTHONS[:-1]}))
+        with self.assertRaisesRegex(remediation.RemediationError, r"has no `security-dependencies \(3\.14\)` job"):
+            remediation.remediate(github)
+
+    def test_security_workflow_uploads_the_reports_of_the_expected_audit_jobs(self) -> None:
+        workflow = (remediation.security.ROOT / remediation.SECURITY_WORKFLOW).read_text(encoding="utf-8")
+        self.assertIn("name: " + remediation.AUDIT_JOB.format("${{ matrix.python }}"), workflow)
+        self.assertIn("python: " + json.dumps(list(PYTHONS)), workflow)
+        self.assertIn("name: " + remediation.ARTIFACT_PREFIX + "${{ matrix.python }}", workflow)
 
     def test_findings_closed_as_not_planned_or_duplicate_are_not_tracked_again(self) -> None:
         for reason, label in (("not_planned", "not planned"), ("duplicate", "a duplicate")):

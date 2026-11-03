@@ -404,9 +404,11 @@ def audit_dependencies(repo: Path, revisions: list[str]) -> None:
 
 
 def write_report(path: Path, report: dict) -> bool:
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
     document = {
         "schema": 1,
         "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "attempt": int(attempt) if re.fullmatch(r"[1-9][0-9]{0,8}", attempt) else None,
         "revision": report["revision"],
         "status": report["status"],
         "findings": report["findings"],

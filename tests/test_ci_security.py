@@ -315,7 +315,7 @@ class CICommandTests(unittest.TestCase):
 
     def run_dependencies(self, report: Path, outcome: Exception | None) -> tuple[int, dict, str]:
         with patch.dict(os.environ, {
-            "GITHUB_ACTIONS": "true", "RUNNER_TEMP": tempfile.gettempdir(),
+            "GITHUB_ACTIONS": "true", "RUNNER_TEMP": tempfile.gettempdir(), "GITHUB_RUN_ATTEMPT": "2",
         }), patch("sys.argv", ["ci_security.py", "dependencies", "--report", str(report)]), patch.object(
             security, "repository", return_value=Path("repo")
         ), patch.object(security, "git", return_value="a" * 40), patch.object(
@@ -339,7 +339,7 @@ class CICommandTests(unittest.TestCase):
                 code, document, _ = self.run_dependencies(Path(directory) / "nested" / "findings.json", outcome)
                 self.assertEqual(code, expected_code)
                 self.assertEqual(document, {
-                    "schema": 1, "python": python, "revision": "a" * 40,
+                    "schema": 1, "python": python, "attempt": 2, "revision": "a" * 40,
                     "status": status, "findings": findings,
                 })
 
@@ -350,7 +350,10 @@ class CICommandTests(unittest.TestCase):
             self.assertEqual(security.main(), 1)
             document = json.loads((Path(directory) / "findings.json").read_text(encoding="utf-8"))
         repository.assert_not_called()
-        self.assertEqual((document["status"], document["revision"], document["findings"]), ("error", None, []))
+        self.assertEqual(
+            (document["status"], document["attempt"], document["revision"], document["findings"]),
+            ("error", None, None, []),
+        )
 
     def test_unwritable_dependency_report_fails_the_check(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
