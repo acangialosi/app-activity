@@ -38,6 +38,9 @@ def main() -> None:
     uninstall.add_argument(
         "--delete-data", action="store_true", help="Also delete collected history"
     )
+    commands.add_parser(
+        "mcp", help="Serve activity history to local AI agents over MCP (stdio)"
+    )
     args = parser.parse_args()
 
     command = args.command or "dashboard"
@@ -72,6 +75,10 @@ def main() -> None:
         if args.delete_data and DATA_DIR.exists():
             shutil.rmtree(DATA_DIR)
         print("Automatic startup removed.")
+    elif command == "mcp":
+        from .mcp_server import run_stdio_server
+
+        raise SystemExit(run_stdio_server())
 
 
 def start_service() -> bool:
