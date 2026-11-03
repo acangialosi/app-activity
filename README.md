@@ -40,9 +40,13 @@ The hour view shows five-minute buckets, with window-title details alongside.
   Window titles can include document names, browser page titles, email subjects,
   or other content displayed in a title bar. Typed text, screenshots, and
   document contents are never collected.
-- App Activity shares history with AI agents only through its optional,
-  read-only MCP server, and only with agents you add it to. Agents usually
-  send what they retrieve to their model provider. See
+- The optional, read-only MCP server is App Activity's only built-in AI agent
+  integration, and only agents you add it to can call it. Agents usually send
+  what they retrieve to their model provider. Adding or removing the server
+  doesn't control other access: while App Activity is tracking, any program on
+  this PC can read history from the dashboard at `http://127.0.0.1:8765`, which
+  doesn't require sign-in, and programs running as you can open `activity.db`.
+  That includes agents that can fetch URLs, run commands, or read files. See
   [Use with AI agents (MCP)](#use-with-ai-agents-mcp).
 - Historical process-name entries are automatically merged into their resolved
   application display name when that application is next observed.
@@ -310,10 +314,12 @@ use most this week?"
   client asks for approval.
 - The server is read-only and bounded: segment queries cover at most 31 days,
   and results are limited and paginated. These limits don't restrict an
-  agent's other tools; an agent allowed to read files or run commands could
-  open `activity.db` directly.
-- To revoke access, remove the server from each agent's configuration, for
-  example with `copilot mcp remove app-activity` or
+  agent's other tools. An agent allowed to read files or run commands could
+  open `activity.db` directly, and one that can fetch URLs or run commands
+  could read the dashboard at `http://127.0.0.1:8765` while App Activity is
+  tracking.
+- To revoke an agent's MCP access, remove the server from each agent's
+  configuration, for example with `copilot mcp remove app-activity` or
   `claude mcp remove app-activity`.
 
 ## Development
