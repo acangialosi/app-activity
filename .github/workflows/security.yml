@@ -46,4 +46,13 @@ jobs:
       - name: Install pinned dependency auditor
         run: python tools/ci_security.py setup-dependencies
       - name: Audit resolved build and security-tool dependencies
-        run: python tools/ci_security.py dependencies
+        run: python tools/ci_security.py dependencies --report "$env:RUNNER_TEMP/dependency-findings/findings.json"
+      - name: Upload dependency findings for automatic remediation
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dependency-findings-${{ matrix.python }}
+          path: ${{ runner.temp }}/dependency-findings/findings.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true

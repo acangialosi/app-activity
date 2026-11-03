@@ -64,12 +64,115 @@ packages.
 
 Resolution uses public PyPI and binary wheels only. A fresh advisory cache is
 used every run. Network/TLS failures, skipped packages, missing wheels,
-unsupported manifests, and malformed reports fail the job. No automatic
-dependency upgrades or advisory suppressions are performed.
+unsupported manifests, and malformed reports fail the job. The audit never
+upgrades dependencies or suppresses advisories; fixes arrive as reviewed pull
+requests (see [Automatic dependency remediation](#automatic-dependency-remediation)).
+
+Each dependency job also writes a findings report with the audited commit, a
+`clean`, `vulnerable`, or `error` status, and each finding's package, installed
+version, advisory ID, aliases, and fixed versions. Runs other than pull request
+checks upload it as the `dependency-findings-<python>` artifact for 14 days.
+The report contains no repository contents, scanner output, or secrets.
 
 Package names and versions are sent to PyPI for resolution and advisory
 queries; repository contents and secrets are not. Dependency review is not
 added as a duplicate vulnerability gate or an unrequested license policy.
+
+## Automatic dependency remediation
+
+Once [set up](#setup), dependency findings are handed to GitHub Copilot cloud
+agent automatically. Each fix still arrives as a pull request that must pass
+the required checks and review before a maintainer merges it. Nothing is
+merged automatically.
+
+The `Dependency remediation` workflow runs on `main` after each `Security` run
+for a push to `main`, the weekly schedule, or a manual run. It acts only on an
+audit of the current `main` head and combines the findings reports from all
+four Python versions. Running it manually from `main` processes the newest
+finished audit of the current head.
+
+- **New findings** open one issue labeled `dependency-remediation`. The issue
+  lists each vulnerable package, installed version, advisory, fixed versions,
+  and affected Python versions, with instructions for the fix. A hidden
+  fingerprint stops later audits with the same findings from opening another
+  issue.
+- **Copilot cloud agent** is then assigned to the issue and opens a pull
+  request. It is not assigned when the `COPILOT_REMEDIATION_TOKEN` secret is
+  missing, when no finding has a fixed release yet, or when open Dependabot
+  pull requests already update every fixable package. It is told to leave a
+  package unchanged when Dependabot already updates it or no fix exists. If
+  Copilot is unassigned while the issue is open, the next run assigns it
+  again.
+- **Changed findings** update the open issue, add a comment, and ask Copilot to
+  update any open Copilot pull request that references the issue with
+  `Fixes #<issue>`.
+- **A clean audit** on all four Python versions comments on and closes open
+  remediation issues as completed.
+- **An incomplete audit**, where a report is missing, expired, or records a
+  failed audit, never closes issues. Any findings it does report are still
+  tracked, and the issue notes that the list may be partial. A malformed
+  report fails the workflow run.
+
+The `Dependency remediation feedback` workflow catches bugs that an upgrade
+causes elsewhere in the code. It runs when the `Security` or
+`Windows installer` checks finish on a `dependabot/**` or `copilot/**` pull
+request branch in this repository, and waits until both have finished for the
+pull request's latest commit. If any check failed, it comments `@copilot` with
+the failed jobs and steps and asks Copilot to fix the root cause. On
+Dependabot pull requests, Copilot keeps the updated version and adapts the code
+instead of reverting it. Copilot pull requests qualify only when they reference
+an open remediation issue with `Fixes #<issue>`. Each commit is reported once,
+and after three requests on a pull request the workflow asks a maintainer to
+take over. It uses only the GitHub API and never checks out or runs pull
+request code.
+
+### Setup
+
+The built-in `GITHUB_TOKEN` cannot assign Copilot or start its work, so these
+steps need a user token. Without it, the remediation workflow still opens and
+updates issues, and both workflows explain in their run summaries what the
+missing secret prevents. You can also assign Copilot to an issue manually.
+
+1. Confirm that Copilot cloud agent is enabled for the repository, and that
+   the token's user can write to the repository and has a paid Copilot plan.
+2. Create a fine-grained personal access token for that user. Limit it to this
+   repository, set an expiration date, and grant read access to metadata plus
+   read and write access to actions, contents, issues, and pull requests.
+   GitHub requires these permissions to assign Copilot through its API.
+3. Store it as the repository Actions secret `COPILOT_REMEDIATION_TOKEN`. Never
+   commit it, and replace it before it expires.
+4. Workflows do not run on Copilot's pushes until a maintainer inspects the
+   changes and selects **Approve and run workflows**, so failure feedback waits
+   for that approval. Administrators can let these workflows run without
+   approval under **Settings > Copilot > Cloud agent**. Review GitHub's warning
+   there first, because workflows can access repository secrets.
+
+### Controls
+
+- To stop work on specific findings, close Copilot's pull request and close the
+  issue as **not planned** or as a duplicate. The workflow does not reopen it
+  or open another issue for those exact findings; different findings open a
+  new issue.
+- To retry, close any unwanted Copilot pull request and unassign Copilot from
+  the issue. Then run the `Dependency remediation` workflow manually from
+  `main`, or wait for the next audit.
+- Removing the `COPILOT_REMEDIATION_TOKEN` secret stops Copilot assignments and
+  fix requests while issues are still tracked. Disable both workflows in the
+  **Actions** tab to stop all automation.
+- Keep the `dependency-remediation` label and the hidden marker in the issue
+  description; the workflows use them to find the issue.
+- Neither workflow suppresses advisories, approves reviews or workflow runs,
+  merges, force-pushes, or changes repository settings.
+
+### Copilot environment
+
+[`copilot-setup-steps.yml`](../.github/workflows/copilot-setup-steps.yml)
+prepares Copilot cloud agent's Ubuntu environment with Python 3.14 and the
+pinned pip-audit. The app targets Windows, so only platform-independent test
+modules run there (listed in
+[`.github/copilot-instructions.md`](../.github/copilot-instructions.md)), and a
+Linux pip-audit run can miss Windows-only transitive dependencies. The Windows
+checks on the pull request decide whether a fix is complete.
 
 ## Reviewed tool upgrades
 
@@ -133,7 +236,16 @@ The ordinary unit suite exercises report parsing and failure handling without
 installing tools. The dedicated secret job installs Betterleaks and runs real
 history/redaction/provider-isolation fixtures in temporary repositories. Fake
 credentials are generated only inside those fixtures, never pushed to GitHub.
-No raw finding reports are uploaded as artifacts.
+Raw scanner reports are never uploaded as artifacts; dependency jobs upload
+only the findings report described above.
+
+`tools/dependency_remediation.py` implements both remediation workflows. It
+refuses to run outside GitHub Actions or from any branch except the default
+branch. The workflows use SHA-pinned actions and checkout without persisted
+credentials. Their built-in token is read-only, except that the remediation
+job can write issues. `COPILOT_REMEDIATION_TOKEN` is used only to assign
+Copilot and to comment on remediation and Dependabot pull requests. Unit tests
+run the tool against a simulated GitHub API.
 
 ## Remediation and exceptions
 
@@ -141,8 +253,10 @@ No raw finding reports are uploaded as artifacts.
   credential, and remove it from the relevant history. Merely deleting the
   latest copy does not remove earlier exposure. Coordinate any history rewrite
   explicitly; these tools never rewrite history.
-- **Dependency finding:** review the advisory and intentionally update the
-  affected pins, then rerun the PR checks.
+- **Dependency finding:** the `Dependency remediation` workflow tracks it in an
+  issue and, when configured, assigns Copilot cloud agent to propose a fix.
+  Review the advisory and the proposed pins before merging, or update the
+  affected pins yourself, then rerun the PR checks.
 - **Tool/network/TLS failure:** inspect the failed Actions job and repair the
   runner/setup or connection. Do not disable certificate verification or accept
   an incomplete scan as clean.
@@ -179,4 +293,6 @@ recursive decoding remain disabled. Only fetched history is available to CI.
 Audits cover known Python package advisories, not Windows/Python themselves,
 Inno Setup, other native tools, or every bundled native library. Additional
 platforms, Python versions, dependency formats, and major scanner upgrades
-require explicit review.
+require explicit review. Automatic remediation covers only findings from this
+Python dependency audit. Copilot's fixes can be incomplete or wrong; required
+checks and maintainer review remain the safeguard.

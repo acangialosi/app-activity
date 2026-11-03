@@ -6,6 +6,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -100,6 +101,24 @@ class AuditTests(unittest.TestCase):
             with self.assertRaises(security.SecurityError):
                 security.inspect_audit(self.report([vulnerable], 1))
         self.assertIn("TEST-ADVISORY", output.getvalue())
+
+    def test_vulnerabilities_carry_structured_findings(self) -> None:
+        vulnerable = {"name": "fixture", "version": "1.0", "vulns": [
+            {"id": "GHSA-aaaa-bbbb-cccc", "aliases": ["CVE-2026-0001"], "fix_versions": ["1.1"]},
+            {"id": "PYSEC-2026-1", "fix_versions": []},
+        ]}
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            with self.assertRaises(security.VulnerabilityError) as raised:
+                security.inspect_audit(self.report([vulnerable], 1))
+        self.assertEqual(raised.exception.findings, [
+            {"package": "fixture", "version": "1.0", "advisory": "GHSA-aaaa-bbbb-cccc",
+             "fix_versions": ["1.1"], "aliases": ["CVE-2026-0001"]},
+            {"package": "fixture", "version": "1.0", "advisory": "PYSEC-2026-1",
+             "fix_versions": [], "aliases": []},
+        ])
+        self.assertEqual(json.loads(output.getvalue().splitlines()[0]), {
+            "package": "fixture", "version": "1.0", "advisory": "GHSA-aaaa-bbbb-cccc", "fix_versions": ["1.1"],
+        })
 
     def test_missing_skipped_empty_and_failed_reports_fail(self) -> None:
         cases = [
@@ -293,6 +312,61 @@ class CICommandTests(unittest.TestCase):
         self.assertFalse(security.TOOLS.is_relative_to(security.ROOT))
         self.assertFalse(hasattr(security, "install_hook"))
         self.assertFalse(hasattr(security, "outgoing"))
+
+    def run_dependencies(self, report: Path, outcome: Exception | None) -> tuple[int, dict, str]:
+        with patch.dict(os.environ, {
+            "GITHUB_ACTIONS": "true", "RUNNER_TEMP": tempfile.gettempdir(),
+        }), patch("sys.argv", ["ci_security.py", "dependencies", "--report", str(report)]), patch.object(
+            security, "repository", return_value=Path("repo")
+        ), patch.object(security, "git", return_value="a" * 40), patch.object(
+            security, "audit_dependencies", side_effect=outcome
+        ), contextlib.redirect_stderr(io.StringIO()) as errors:
+            code = security.main()
+        document = json.loads(report.read_text(encoding="utf-8")) if report.exists() else {}
+        return code, document, errors.getvalue()
+
+    def test_dependency_report_records_each_outcome(self) -> None:
+        finding = {"package": "fixture", "version": "1.0", "advisory": "PYSEC-2026-1",
+                   "fix_versions": ["1.1"], "aliases": []}
+        cases = {
+            "clean": (None, 0, []),
+            "vulnerable": (security.VulnerabilityError("Known dependency vulnerabilities found.", [finding]), 1, [finding]),
+            "error": (security.SecurityError("Dependency audit failed."), 1, []),
+        }
+        python = f"{sys.version_info.major}.{sys.version_info.minor}"
+        for status, (outcome, expected_code, findings) in cases.items():
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                code, document, _ = self.run_dependencies(Path(directory) / "nested" / "findings.json", outcome)
+                self.assertEqual(code, expected_code)
+                self.assertEqual(document, {
+                    "schema": 1, "python": python, "revision": "a" * 40,
+                    "status": status, "findings": findings,
+                })
+
+    def test_dependency_report_is_written_when_the_audit_cannot_start(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True), patch(
+            "sys.argv", ["ci_security.py", "dependencies", "--report", str(Path(directory) / "findings.json")]
+        ), patch.object(security, "repository") as repository, contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(security.main(), 1)
+            document = json.loads((Path(directory) / "findings.json").read_text(encoding="utf-8"))
+        repository.assert_not_called()
+        self.assertEqual((document["status"], document["revision"], document["findings"]), ("error", None, []))
+
+    def test_unwritable_dependency_report_fails_the_check(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            blocker = Path(directory) / "blocker"
+            blocker.write_text("not a directory", encoding="utf-8")
+            code, _, errors = self.run_dependencies(blocker / "findings.json", None)
+        self.assertEqual(code, 1)
+        self.assertIn("report could not be written", errors)
+
+    def test_report_option_is_limited_to_dependency_audits(self) -> None:
+        for command in ("setup-secrets", "setup-dependencies", "secrets"):
+            with self.subTest(command=command), patch(
+                "sys.argv", ["ci_security.py", command, "--report", "findings.json"]
+            ), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                security.main()
+            self.assertEqual(raised.exception.code, 2)
 
 
 @unittest.skipUnless((security.TOOLS / "betterleaks.exe").exists(), "Real scanner fixtures run in the security CI job")

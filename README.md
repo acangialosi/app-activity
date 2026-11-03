@@ -346,6 +346,13 @@ dependencies with pip-audit on Windows/Python 3.11-3.14. Required checks block
 merging when findings or scanner failures occur. GitHub secret push protection,
 secret scanning, Dependabot alerts, and CodeQL remain enabled.
 
+Dependency findings on `main` open a tracking issue. Once a maintainer adds the
+`COPILOT_REMEDIATION_TOKEN` secret, Copilot cloud agent is assigned to propose
+a fix as a pull request and is asked to fix failed checks on its own and
+Dependabot pull requests. Maintainers still review and merge every fix. See
+[Automatic dependency remediation](docs/security-checks.md#automatic-dependency-remediation)
+for setup.
+
 These CI checks run after a push, not on your workstation. GitHub push
 protection can reject supported secret patterns during a push.
 See [Security checks](docs/security-checks.md) for coverage, remediation,
