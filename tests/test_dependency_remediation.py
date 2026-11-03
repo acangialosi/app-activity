@@ -325,7 +325,9 @@ class RemediateTests(WorkflowFixture):
         self.assertIn("- Opened #7 for the vulnerable dependencies.", self.summary.read_text(encoding="utf-8"))
 
     def test_unchanged_findings_leave_the_tracked_issue_alone(self) -> None:
-        github = FakeGitHub(audit_routes(issues=[tracked_issue(digest=current_digest())]))
+        routes = audit_routes(issues=[tracked_issue(digest=current_digest())])
+        routes[("GET", PULLS)] = []
+        github = FakeGitHub(routes)
         output = self.run_command(remediation.remediate, github)
         self.assertEqual(changes(github), [])
         self.assertIn("#5 already tracks the current dependency findings.", output)
@@ -335,21 +337,110 @@ class RemediateTests(WorkflowFixture):
         routes = audit_routes(issues=[tracked_issue(digest="0" * 16)])
         routes.update({
             ("PATCH", f"repos/{REPO}/issues/5"): {},
+            ("GET", f"repos/{REPO}/issues/5/comments"): [],
             ("POST", f"repos/{REPO}/issues/5/comments"): {},
             ("GET", PULLS): [copilot_pull_request(9), copilot_pull_request(10, "Fixes #6"), dependabot_pull()],
+            ("GET", "user"): {"login": "maintainer"},
+            ("GET", f"repos/{REPO}/issues/9/comments"): [],
             ("POST", f"repos/{REPO}/issues/9/comments"): {},
+            # The Dependabot update of a listed package is reviewed too; its checks are still running.
+            ("GET", f"repos/{REPO}/actions/runs?head_sha={PR_SHA}&event=pull_request"): {"workflow_runs": []},
         })
         github = FakeGitHub(routes)
-        self.run_command(remediation.remediate, github)
-        update = github.sent("PATCH")[0][1]
-        self.assertEqual(update["title"], "Fix vulnerable dependency: requests")
-        self.assertTrue(update["body"].startswith(remediation.ISSUE_MARKER.format(current_digest())))
+        output = self.run_command(remediation.remediate, github)
+        digest = current_digest()
+        (_, pending, _), (_, final, _) = github.sent("PATCH")
+        self.assertEqual(pending["title"], "Fix vulnerable dependency: requests")
+        self.assertTrue(pending["body"].startswith(remediation.ISSUE_MARKER.format(digest)))
+        self.assertIn(remediation.PENDING_MARKER, pending["body"])
+        self.assertEqual(final, {"body": pending["body"].replace(remediation.PENDING_MARKER + "\n", "")})
         posts = github.sent("POST")
         self.assertEqual(
             [(resource, agent) for resource, _, agent in posts],
             [(f"repos/{REPO}/issues/5/comments", False), (f"repos/{REPO}/issues/9/comments", True)],
         )
         self.assertTrue(posts[1][1]["body"].startswith("@copilot The dependency findings in #5 changed"))
+        for _, data, _ in posts:
+            self.assertTrue(data["body"].endswith(remediation.FINDINGS_MARKER.format(digest)))
+        self.assertIn("Waiting for the Security workflow to finish on #12", output)
+
+    def test_failed_notices_are_retried_without_duplicates(self) -> None:
+        routes = audit_routes(issues=[tracked_issue(digest="0" * 16)])
+        routes.update({
+            ("PATCH", f"repos/{REPO}/issues/5"): {},
+            ("POST", f"repos/{REPO}/issues/5/comments"): {},
+            ("GET", PULLS): [copilot_pull_request(9), copilot_pull_request(10)],
+            ("GET", "user"): {"login": "maintainer"},
+            ("POST", f"repos/{REPO}/issues/9/comments"): {},
+            ("POST", f"repos/{REPO}/issues/10/comments"): remediation.GitHubError("failed", 502),
+        })
+        for number in (5, 9, 10):
+            routes[("GET", f"repos/{REPO}/issues/{number}/comments")] = []
+        failed = FakeGitHub(routes)
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(remediation.GitHubError):
+            remediation.remediate(failed)
+        [(_, pending, _)] = failed.sent("PATCH")
+        self.assertIn(remediation.PENDING_MARKER, pending["body"])
+        # The retry finds the pending issue and the notices that were posted, and posts only the missing one.
+        notices = {resource: data["body"] for resource, data, _ in failed.sent("POST")}
+        routes.update({
+            ("GET", ISSUES): [{**tracked_issue(), "body": pending["body"]}],
+            ("GET", f"repos/{REPO}/issues/5/comments"): [
+                comment(remediation.ISSUE_AUTHOR, notices[f"repos/{REPO}/issues/5/comments"]),
+            ],
+            ("GET", f"repos/{REPO}/issues/9/comments"): [
+                comment("maintainer", notices[f"repos/{REPO}/issues/9/comments"]),
+            ],
+            ("POST", f"repos/{REPO}/issues/10/comments"): {},
+        })
+        retry = FakeGitHub(routes)
+        output = self.run_command(remediation.remediate, retry)
+        self.assertEqual([resource for resource, _, _ in retry.sent("POST")], [f"repos/{REPO}/issues/10/comments"])
+        self.assertNotIn(remediation.PENDING_MARKER, retry.sent("PATCH")[-1][1]["body"])
+        self.assertIn("Copilot was already asked to update #9 for the current findings.", output)
+
+    def test_only_the_newest_notice_from_the_author_counts(self) -> None:
+        notice = remediation.FINDINGS_MARKER.format
+        digest = current_digest()
+        cases = {
+            "newest notice matches": ([comment("maintainer", notice("1" * 16)), comment("maintainer", notice(digest))],
+                                      True),
+            "findings changed back": ([comment("maintainer", notice(digest)), comment("maintainer", notice("1" * 16))],
+                                      False),
+            "other authors ignored": ([comment("intruder", notice(digest))], False),
+        }
+        for name, (comments, expected) in cases.items():
+            with self.subTest(name):
+                github = FakeGitHub({("GET", f"repos/{REPO}/issues/9/comments"): comments})
+                self.assertEqual(remediation.announced(github, REPO, 9, "maintainer", digest), expected)
+
+    def test_new_issues_review_failed_checks_on_covering_dependabot_updates(self) -> None:
+        routes = audit_routes()
+        routes.update({
+            ("GET", f"repos/{REPO}/labels/{remediation.LABEL}"): {},
+            ("POST", f"repos/{REPO}/issues"): {"number": 7, "assignees": []},
+            # Only the update of a listed package is reviewed; the flask update has no routes for its checks.
+            ("GET", PULLS): [dependabot_pull(), dependabot_pull(13, sha=OLD, ref="dependabot/pip/flask-3.0.0")],
+            ("GET", f"repos/{REPO}/actions/runs?head_sha={PR_SHA}&event=pull_request"): {"workflow_runs": [
+                pr_run(identifier=300), pr_run(remediation.SECURITY_WORKFLOW, "success", 301),
+            ]},
+            ("GET", f"repos/{REPO}/actions/runs/300/jobs?filter=latest"): job_list(),
+            ("GET", "user"): {"login": "maintainer"},
+            ("GET", f"repos/{REPO}/issues/12/comments"): [],
+            ("POST", f"repos/{REPO}/issues/12/comments"): {},
+        })
+        github = FakeGitHub(routes)
+        output = self.run_command(remediation.remediate, github)
+        self.assertIn("already update requests to fixed versions; Copilot was not assigned to #7.", output)
+        resource, data, agent = github.sent("POST")[-1]
+        self.assertEqual((resource, agent), (f"repos/{REPO}/issues/12/comments", True))
+        self.assertTrue(data["body"].startswith(f"@copilot Checks failed at `{PR_SHA[:12]}` on this pull request:"))
+        self.assertIn("Keep the updated dependency version", data["body"])
+        self.assertIn("(attempt 1 of 3)", output)
+        github = FakeGitHub(routes, agent_token=None)
+        output = self.run_command(remediation.remediate, github)
+        self.assertNotIn(("GET", PULLS), [call[:2] for call in github.calls])
+        self.assertIn("::warning::Add the COPILOT_REMEDIATION_TOKEN secret", output)
 
     def test_clean_audit_closes_open_issues(self) -> None:
         clean = {python: report(python, "clean") for python in PYTHONS}
@@ -372,14 +463,19 @@ class RemediateTests(WorkflowFixture):
         self.assertIn("::warning::The Python 3.14 dependency findings report is missing or expired.", output)
         self.assertIn("::warning::The dependency audit is incomplete for Python 3.13, 3.14;", output)
 
-    def test_findings_closed_as_not_planned_or_duplicate_are_not_reopened(self) -> None:
+    def test_findings_closed_as_not_planned_or_duplicate_are_not_tracked_again(self) -> None:
         for reason, label in (("not_planned", "not planned"), ("duplicate", "a duplicate")):
             with self.subTest(reason=reason):
                 declined = tracked_issue(digest=current_digest(), state="closed", reason=reason)
-                github = FakeGitHub(audit_routes(issues=[declined]))
+                # The opt-out also keeps another open remediation issue from moving to the declined findings.
+                github = FakeGitHub(audit_routes(issues=[declined, tracked_issue(6, digest="1" * 16)]))
                 output = self.run_command(remediation.remediate, github)
                 self.assertEqual(changes(github), [])
-                self.assertIn(f"::warning::#5 was closed as {label} for these exact findings", output)
+                self.assertIn(
+                    f"::warning::#5 was closed as {label} for these exact findings; remediation issues were left "
+                    "unchanged.",
+                    output,
+                )
 
     def test_runs_that_did_not_audit_the_current_head_change_nothing(self) -> None:
         cases = {
@@ -413,10 +509,11 @@ class RemediateTests(WorkflowFixture):
 
 
 class AssignmentTests(WorkflowFixture):
-    def assign(self, github: FakeGitHub, findings: list[dict]) -> str:
+    def assign(self, github: FakeGitHub, findings: list[dict], pulls: list[dict] | None = None) -> str:
+        updates = remediation.dependabot_pulls(pulls or [], REPO, "main")
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            remediation.assign(github, REPO, "main", {"number": 7, "assignees": []}, findings)
+            remediation.assign(github, REPO, "main", {"number": 7, "assignees": []}, findings, updates)
         return output.getvalue()
 
     def test_assignment_waits_for_a_token_and_a_fixed_release(self) -> None:
@@ -428,16 +525,16 @@ class AssignmentTests(WorkflowFixture):
     def test_dependabot_pull_requests_narrow_or_replace_the_assignment(self) -> None:
         human = {**dependabot_pull(4, ref="dependabot/pip/urllib3-2.2.2"), "user": {"login": "octocat"}}
         pulls = [dependabot_pull(3, ref="dependabot/pip/Requests-2.32.0"), human]
-        github = FakeGitHub({("GET", PULLS): pulls})
-        output = self.assign(github, [finding("requests")])
+        github = FakeGitHub({})
+        output = self.assign(github, [finding("requests")], pulls)
         self.assertIn(
             "Open Dependabot pull requests already update requests to fixed versions; Copilot was not assigned to #7.",
             output,
         )
         self.assertEqual(changes(github), [])
         assigned = {"assignees": [{"login": remediation.COPILOT_ASSIGNEE}]}
-        github = FakeGitHub({("GET", PULLS): pulls, ("POST", f"repos/{REPO}/issues/7/assignees"): assigned})
-        self.assign(github, [finding("requests"), finding("urllib3", ("2.2.2",)), finding("zipp", ())])
+        github = FakeGitHub({("POST", f"repos/{REPO}/issues/7/assignees"): assigned})
+        self.assign(github, [finding("requests"), finding("urllib3", ("2.2.2",)), finding("zipp", ())], pulls)
         instructions = github.sent("POST")[0][1]["agent_assignment"]["custom_instructions"]
         self.assertIn("already update requests to fixed versions; leave those packages unchanged.", instructions)
         self.assertIn("No fixed release exists yet for zipp;", instructions)
@@ -458,18 +555,35 @@ class AssignmentTests(WorkflowFixture):
         }
         for name, (ref, findings, covered) in cases.items():
             with self.subTest(name):
-                github = FakeGitHub({("GET", PULLS): [dependabot_pull(3, ref=ref)]})
-                self.assertEqual(remediation.dependabot_coverage(github, REPO, "main", findings), covered)
+                updates = remediation.dependabot_pulls([dependabot_pull(3, ref=ref)], REPO, "main")
+                self.assertEqual(remediation.dependabot_coverage(updates, findings), covered)
+
+    def test_only_valid_dependabot_pull_requests_into_the_branch_count(self) -> None:
+        valid = dependabot_pull()
+        invalid = [
+            {**valid, "base": {"ref": "release"}},
+            {**valid, "head": {**valid["head"], "sha": "not a commit"}},
+            {**valid, "number": "12"},
+        ]
+        self.assertEqual(remediation.dependabot_pulls([valid, *invalid], REPO, "main"), [valid])
 
     def test_silently_ignored_assignment_fails_the_run(self) -> None:
         github = FakeGitHub({
-            ("GET", PULLS): [],
             ("POST", f"repos/{REPO}/issues/7/assignees"): {"assignees": []},
             ("GET", f"repos/{REPO}/issues/7"): {"assignees": []},
         })
         with self.assertRaisesRegex(remediation.RemediationError, "Copilot was not assigned to #7"):
             self.assign(github, [finding("requests")])
-        self.assertEqual([call[3] for call in github.calls], [False, True, True])
+        self.assertEqual([call[3] for call in github.calls], [True, True])
+
+
+def job_list() -> dict:
+    return {"jobs": [
+        {"id": 900, "name": "test", "conclusion": "failure", "steps": [
+            {"name": "Run tests", "conclusion": "failure"}, {"name": "Checkout", "conclusion": "success"},
+        ]},
+        {"id": 901, "name": "build", "conclusion": "skipped", "steps": []},
+    ]}
 
 
 def pr_run(
@@ -492,19 +606,13 @@ def feedback_routes(pull: dict, runs: list[dict] | None = None, comments: list[d
             pr_run(branch=branch), pr_run(remediation.SECURITY_WORKFLOW, "success", 102, branch),
             pr_run(conclusion="success", identifier=50, branch=branch),
         ]
-    jobs = [
-        {"id": 900, "name": "test", "conclusion": "failure", "steps": [
-            {"name": "Run tests", "conclusion": "failure"}, {"name": "Checkout", "conclusion": "success"},
-        ]},
-        {"id": 901, "name": "build", "conclusion": "skipped", "steps": []},
-    ]
     routes = base_routes()
     routes.update({
         ("GET", f"repos/{REPO}/actions/runs/{RUN_ID}"): pr_run(branch=branch),
         ("GET", f"repos/{REPO}/pulls?{query}"): [pull],
         ("GET", ISSUES): [tracked_issue()],
         ("GET", f"repos/{REPO}/actions/runs?head_sha={PR_SHA}&event=pull_request"): {"workflow_runs": runs},
-        ("GET", f"repos/{REPO}/actions/runs/{RUN_ID}/jobs?filter=latest"): {"jobs": jobs},
+        ("GET", f"repos/{REPO}/actions/runs/{RUN_ID}/jobs?filter=latest"): job_list(),
         ("GET", "user"): {"login": "maintainer"},
         ("GET", f"repos/{REPO}/issues/{pull['number']}/comments"): comments or [],
         ("POST", f"repos/{REPO}/issues/{pull['number']}/comments"): {},

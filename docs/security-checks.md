@@ -107,7 +107,9 @@ skipped, so only reviewed code on `main` can use the remediation token.
   unassigned while the issue is open, the next run assigns it again.
 - **Changed findings** update the open issue, add a comment, and ask Copilot to
   update any open Copilot pull request that references the issue with
-  `Fixes #<issue>`.
+  `Fixes #<issue>`. Hidden markers in these comments record each notice, and
+  the issue keeps a hidden pending marker until every notice is posted, so if
+  a run fails partway, the next run posts only the missing notices.
 - **A clean audit** on all four Python versions comments on and closes open
   remediation issues as completed.
 - **An incomplete audit**, where a report is missing, expired, or records a
@@ -128,8 +130,12 @@ a pip package listed in an open remediation issue, so GitHub Actions and other
 unrelated updates are left alone. Copilot pull requests qualify only when they
 reference an open remediation issue with `Fixes #<issue>`. Each commit is
 reported once, and after three requests on a pull request the workflow asks a
-maintainer to take over. It uses only the GitHub API and never checks out or
-runs pull request code.
+maintainer to take over. Because a Dependabot pull request's checks can fail
+before an issue lists its package, each `Dependency remediation` run also
+reviews the latest checks on open Dependabot pull requests that update a listed
+package, with the same limits. Both workflows share one run queue, so they
+never report the same commit twice. They use only the GitHub API and never
+check out or run pull request code.
 
 ### Setup
 
@@ -155,9 +161,11 @@ missing secret prevents. You can also assign Copilot to an issue manually.
 ### Controls
 
 - To stop work on specific findings, close Copilot's pull request and close the
-  issue as **not planned** or as a duplicate. The workflow does not reopen it
-  or open another issue for those exact findings; different findings open a
-  new issue.
+  issue as **not planned** or as a duplicate. While audits report those exact
+  findings, the workflow leaves every remediation issue unchanged: it does not
+  reopen that issue, open another one, or move another open issue to those
+  findings. Different findings are tracked again, and reopening the issue
+  resumes work.
 - To retry, close any unwanted Copilot pull request and unassign Copilot from
   the issue. Then run the `Dependency remediation` workflow manually from
   `main`, or wait for the next audit.
@@ -165,8 +173,9 @@ missing secret prevents. You can also assign Copilot to an issue manually.
   fix requests while issues are still tracked. Disable both workflows in the
   **Actions** tab to stop all automation.
 - Keep the `dependency-remediation` label and the hidden markers in the issue
-  description; the workflows use them to find the issue and its vulnerable
-  packages.
+  description and automated comments; the workflows use them to find the
+  issue, its vulnerable packages, and the notices and fix requests already
+  posted.
 - Neither workflow suppresses advisories, approves reviews or workflow runs,
   merges, force-pushes, or changes repository settings.
 

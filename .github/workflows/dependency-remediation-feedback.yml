@@ -22,9 +22,9 @@ jobs:
       && github.event.workflow_run.conclusion != 'action_required'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Evaluate each finished check run in order, so one pull request never gets duplicate fix requests.
+    # Share the remediation workflow's queue, so its Dependabot review and these runs never request the same fix twice.
     concurrency:
-      group: dependency-remediation-feedback-${{ github.event.workflow_run.head_branch }}
+      group: dependency-remediation
       queue: max
     permissions:
       actions: read

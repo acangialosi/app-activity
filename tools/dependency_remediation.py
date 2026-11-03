@@ -52,6 +52,9 @@ ISSUE_MARKER = "<!-- app-activity:dependency-remediation fingerprint={} -->"
 ISSUE_PATTERN = re.compile(r"<!-- app-activity:dependency-remediation fingerprint=([0-9a-f]{16}) -->")
 PACKAGES_MARKER = "<!-- app-activity:dependency-remediation packages={} -->"
 PACKAGES_PATTERN = re.compile(r"<!-- app-activity:dependency-remediation packages=([a-z0-9,-]*) -->")
+PENDING_MARKER = "<!-- app-activity:dependency-remediation notifications-pending -->"
+FINDINGS_MARKER = "<!-- app-activity:dependency-remediation-findings fingerprint={} -->"
+FINDINGS_PATTERN = re.compile(r"<!-- app-activity:dependency-remediation-findings fingerprint=([0-9a-f]{16}) -->")
 PIP_UPDATES = "dependabot/pip/"
 VERSION_SEPARATOR = re.compile(r"-(?=[0-9])")
 CI_MARKER = "<!-- app-activity:dependency-remediation-ci sha={} -->"
@@ -462,43 +465,51 @@ def track(
     findings: list[dict], missing: list[str], issues: list[dict],
 ) -> None:
     digest = fingerprint(findings)
+    # An opt-out takes precedence over every issue, so declined findings never move into an open issue either.
+    declined = [
+        issue for issue in issues
+        if issue["state"] == "closed" and marker(issue) == digest and one_of(issue.get("state_reason"), OPT_OUT)
+    ]
+    if declined:
+        closed = declined[-1]
+        reason = "a duplicate" if closed["state_reason"] == "duplicate" else "not planned"
+        note(
+            f"#{closed['number']} was closed as {reason} for these exact findings; remediation issues were left "
+            "unchanged.",
+            warning=True,
+        )
+        return
+    pulls = open_pulls(github, repo, branch) if github.agent_token else []
+    updates = dependabot_pulls(pulls, repo, branch)
     title = issue_title(findings)
-    body = issue_body(digest, repo, branch, run_id, head, findings, missing)
     url = run_url(repo, run_id)
     current = [issue for issue in issues if issue["state"] == "open"]
     if current:
         issue = current[0]
         number = issue["number"]
-        if marker(issue) != digest:
-            github.api("PATCH", f"repos/{repo}/issues/{number}", {"title": title, "body": body})
-            comment = (
-                f"The dependency findings changed at `{short(head)}` ([Security run]({url})). "
-                "The description lists the current findings."
-            )
-            github.api("POST", f"repos/{repo}/issues/{number}/comments", {"body": comment})
-            note(f"Updated #{number} with the current dependency findings.")
+        if marker(issue) != digest or PENDING_MARKER in issue["body"]:
+            # The pending marker stays until every notice is posted, so a failed run's retry posts the rest.
+            pending = issue_body(digest, repo, branch, run_id, head, findings, missing, pending=True)
+            github.api("PATCH", f"repos/{repo}/issues/{number}", {"title": title, "body": pending})
+            announce_change(github, repo, number, digest, head, url)
             if github.agent_token:
-                notify_pulls(github, repo, branch, number, head, url)
+                notify_pulls(github, repo, branch, pulls, number, digest, head, url)
+            body = issue_body(digest, repo, branch, run_id, head, findings, missing)
+            github.api("PATCH", f"repos/{repo}/issues/{number}", {"body": body})
+            note(f"Updated #{number} with the current dependency findings.")
         else:
             note(f"#{number} already tracks the current dependency findings.")
-        assign(github, repo, branch, issue, findings)
-        return
-    declined = [
-        issue for issue in issues if marker(issue) == digest and one_of(issue.get("state_reason"), OPT_OUT)
-    ]
-    if declined:
-        closed = declined[-1]
-        reason = "a duplicate" if closed["state_reason"] == "duplicate" else "not planned"
-        note(f"#{closed['number']} was closed as {reason} for these exact findings; no new issue was opened.",
-             warning=True)
-        return
-    ensure_label(github, repo)
-    created = github.api("POST", f"repos/{repo}/issues", {"title": title, "body": body, "labels": [LABEL]})
-    number = field(created, "number")
-    if type(number) is not int or number <= 0:
-        raise RemediationError("GitHub did not return the new remediation issue number.")
-    note(f"Opened #{number} for the vulnerable dependencies.")
-    assign(github, repo, branch, created, findings)
+    else:
+        ensure_label(github, repo)
+        body = issue_body(digest, repo, branch, run_id, head, findings, missing)
+        issue = github.api("POST", f"repos/{repo}/issues", {"title": title, "body": body, "labels": [LABEL]})
+        number = field(issue, "number")
+        if type(number) is not int or number <= 0:
+            raise RemediationError("GitHub did not return the new remediation issue number.")
+        note(f"Opened #{number} for the vulnerable dependencies.")
+    assign(github, repo, branch, issue, findings, updates)
+    if github.agent_token:
+        review_updates(github, repo, updates, findings)
 
 
 def ensure_label(github: GitHub, repo: str) -> None:
@@ -529,14 +540,19 @@ def issue_title(findings: list[dict]) -> str:
     return title
 
 
+def listed_packages(findings: list[dict]) -> list[str]:
+    return sorted({finding["package"] for finding in findings})[:MAX_ROWS]
+
+
 def issue_body(
     digest: str, repo: str, branch: str, run_id: int, head: str, findings: list[dict], missing: list[str],
+    pending: bool = False,
 ) -> str:
     url = run_url(repo, run_id)
-    packages = sorted({finding["package"] for finding in findings})[:MAX_ROWS]
     lines = [
         ISSUE_MARKER.format(digest),
-        PACKAGES_MARKER.format(",".join(packages)),
+        PACKAGES_MARKER.format(",".join(listed_packages(findings))),
+        *([PENDING_MARKER] if pending else []),
         f"## Vulnerable dependencies on `{branch}`",
         "",
         f"The [Security workflow run]({url}) audited `{short(head)}` and found these known vulnerabilities:",
@@ -612,7 +628,7 @@ def copilot_assigned(document: object) -> bool:
     )
 
 
-def assign(github: GitHub, repo: str, branch: str, issue: dict, findings: list[dict]) -> None:
+def assign(github: GitHub, repo: str, branch: str, issue: dict, findings: list[dict], updates: list[dict]) -> None:
     number = issue["number"]
     if copilot_assigned(issue):
         note(f"Copilot is already assigned to #{number}.")
@@ -630,7 +646,7 @@ def assign(github: GitHub, repo: str, branch: str, issue: dict, findings: list[d
             warning=True,
         )
         return
-    covered = dependabot_coverage(github, repo, branch, findings)
+    covered = dependabot_coverage(updates, findings)
     if len(covered) == len(fixable):
         updated = ", ".join(covered)
         note(
@@ -688,6 +704,29 @@ def dependabot_update(pull: dict, repo: str) -> bool:
     )
 
 
+def open_pulls(github: GitHub, repo: str, branch: str) -> list[dict]:
+    query = urllib.parse.urlencode({"state": "open", "base": branch})
+    return list(github.pages(f"repos/{repo}/pulls?{query}"))
+
+
+def dependabot_pulls(pulls: list[dict], repo: str, branch: str) -> list[dict]:
+    return [
+        pull for pull in pulls
+        if dependabot_update(pull, repo) and field(pull, "base", "ref") == branch
+        and type(pull.get("number")) is int and matches(SHA, field(pull, "head", "sha"))
+        and valid_branch(field(pull, "head", "ref"))
+    ]
+
+
+def update_name(pull: dict) -> str:
+    return pull["head"]["ref"].rsplit("/", 1)[-1]
+
+
+def updates_package(pull: dict, packages: object) -> bool:
+    name = update_name(pull)
+    return any(proposed_version(name, package) is not None for package in packages)
+
+
 def proposed_version(name: str, package: str) -> str | None:
     # Dependabot names pip update branches <package>-<version>, and package names can contain "-<digit>".
     for separator in VERSION_SEPARATOR.finditer(name):
@@ -707,16 +746,12 @@ def resolves(version: str, fixes: list[str]) -> bool:
     return all(RELEASE.fullmatch(value) for value in (version, *fixes)) and proposed >= max(fixed)
 
 
-def dependabot_coverage(github: GitHub, repo: str, branch: str, findings: list[dict]) -> list[str]:
+def dependabot_coverage(updates: list[dict], findings: list[dict]) -> list[str]:
     required: dict[str, list[list[str]]] = {}
     for finding in findings:
         if finding["fix_versions"]:
             required.setdefault(finding["package"], []).append(finding["fix_versions"])
-    query = urllib.parse.urlencode({"state": "open", "base": branch})
-    names = [
-        pull["head"]["ref"].rsplit("/", 1)[-1]
-        for pull in github.pages(f"repos/{repo}/pulls?{query}") if dependabot_update(pull, repo)
-    ]
+    names = [update_name(pull) for pull in updates]
     covered = []
     for package, fixes in sorted(required.items()):
         versions = [version for name in names if (version := proposed_version(name, package)) is not None]
@@ -741,16 +776,63 @@ def copilot_pull(pull: dict, repo: str, branch: str) -> bool:
     )
 
 
-def notify_pulls(github: GitHub, repo: str, branch: str, number: int, sha: str, url: str) -> None:
-    query = urllib.parse.urlencode({"state": "open", "base": branch})
-    comment = (
+def announced(github: GitHub, repo: str, number: int, login: str, digest: str) -> bool:
+    # Only the newest notice counts, so findings that change back to an earlier set are announced again.
+    latest = None
+    for comment in github.pages(f"repos/{repo}/issues/{number}/comments"):
+        body = comment.get("body")
+        if field(comment, "user", "login") == login and isinstance(body, str):
+            found = FINDINGS_PATTERN.findall(body)
+            if found:
+                latest = found[-1]
+    return latest == digest
+
+
+def announce_change(github: GitHub, repo: str, number: int, digest: str, sha: str, url: str) -> None:
+    if announced(github, repo, number, ISSUE_AUTHOR, digest):
+        return
+    comment = "\n".join([
+        f"The dependency findings changed at `{short(sha)}` ([Security run]({url})). "
+        "The description lists the current findings.",
+        FINDINGS_MARKER.format(digest),
+    ])
+    github.api("POST", f"repos/{repo}/issues/{number}/comments", {"body": comment})
+
+
+def agent_login(github: GitHub) -> str:
+    login = github.get("user", agent=True).get("login")
+    if not isinstance(login, str) or not login:
+        raise RemediationError("Could not identify the user behind COPILOT_REMEDIATION_TOKEN.")
+    return login
+
+
+def notify_pulls(
+    github: GitHub, repo: str, branch: str, pulls: list[dict], number: int, digest: str, sha: str, url: str,
+) -> None:
+    targets = [pull for pull in pulls if copilot_pull(pull, repo, branch) and number in closing_references(pull)]
+    if not targets:
+        return
+    login = agent_login(github)
+    comment = "\n".join([
         f"@copilot The dependency findings in #{number} changed at `{short(sha)}` ([Security run]({url})). "
-        "Re-read the issue and update this pull request to resolve the current findings, following its instructions."
-    )
-    for pull in github.pages(f"repos/{repo}/pulls?{query}"):
-        if copilot_pull(pull, repo, branch) and number in closing_references(pull):
-            github.api("POST", f"repos/{repo}/issues/{pull['number']}/comments", {"body": comment}, agent=True)
-            note(f"Asked Copilot to update #{pull['number']} for the changed findings.")
+        "Re-read the issue and update this pull request to resolve the current findings, following its instructions.",
+        FINDINGS_MARKER.format(digest),
+    ])
+    for pull in targets:
+        target = pull["number"]
+        if announced(github, repo, target, login, digest):
+            note(f"Copilot was already asked to update #{target} for the current findings.")
+            continue
+        github.api("POST", f"repos/{repo}/issues/{target}/comments", {"body": comment}, agent=True)
+        note(f"Asked Copilot to update #{target} for the changed findings.")
+
+
+def review_updates(github: GitHub, repo: str, updates: list[dict], findings: list[dict]) -> None:
+    # Checks that failed before the issue listed a package were ignored by the feedback workflow, so review them now.
+    packages = listed_packages(findings)
+    for pull in updates:
+        if updates_package(pull, packages):
+            review_checks(github, repo, pull, "dependabot")
 
 
 def feedback(github: GitHub) -> int:
@@ -770,25 +852,27 @@ def feedback(github: GitHub) -> int:
     if pull is None:
         return 0
     kind = eligible(github, repo, branch, pull)
-    if kind is None:
-        return 0
-    runs = latest_runs(github, repo, head_branch, sha)
+    if kind is not None:
+        review_checks(github, repo, pull, kind)
+    return 0
+
+
+def review_checks(github: GitHub, repo: str, pull: dict, kind: str) -> None:
+    runs = latest_runs(github, repo, pull)
     if runs is None:
-        return 0
+        return
     failures = failed_jobs(github, repo, runs)
-    number = pull["number"]
+    number, sha = pull["number"], pull["head"]["sha"]
     if not failures:
         note(f"All checks pass for #{number} at `{short(sha)}`.")
-        return 0
-    if not github.agent_token:
+    elif not github.agent_token:
         note(
             f"Checks failed on #{number}; add the COPILOT_REMEDIATION_TOKEN secret to ask Copilot to fix them "
             "automatically.",
             warning=True,
         )
-        return 0
-    request_fix(github, repo, pull, sha, kind, failures)
-    return 0
+    else:
+        request_fix(github, repo, pull, sha, kind, failures)
 
 
 def find_pull(github: GitHub, repo: str, branch: str, head_branch: str, sha: str) -> dict | None:
@@ -810,12 +894,11 @@ def find_pull(github: GitHub, repo: str, branch: str, head_branch: str, sha: str
 def eligible(github: GitHub, repo: str, branch: str, pull: dict) -> str | None:
     if dependabot_update(pull, repo):
         # The open remediation issue is the trusted record of which packages are currently vulnerable.
-        name = pull["head"]["ref"].rsplit("/", 1)[-1]
         packages = {
             package for issue in remediation_issues(github, repo) if issue["state"] == "open"
             for package in issue_packages(issue)
         }
-        if any(proposed_version(name, package) is not None for package in packages):
+        if updates_package(pull, packages):
             return "dependabot"
     elif copilot_pull(pull, repo, branch):
         for reference in closing_references(pull):
@@ -834,7 +917,8 @@ def eligible(github: GitHub, repo: str, branch: str, pull: dict) -> str | None:
     return None
 
 
-def latest_runs(github: GitHub, repo: str, head_branch: str, sha: str) -> dict[str, dict] | None:
+def latest_runs(github: GitHub, repo: str, pull: dict) -> dict[str, dict] | None:
+    number, head_branch, sha = pull["number"], pull["head"]["ref"], pull["head"]["sha"]
     query = urllib.parse.urlencode({"head_sha": sha, "event": "pull_request"})
     latest: dict[str, dict] = {}
     for run in github.pages(f"repos/{repo}/actions/runs?{query}", "workflow_runs"):
@@ -849,10 +933,10 @@ def latest_runs(github: GitHub, repo: str, head_branch: str, sha: str) -> dict[s
     for path, name in WORKFLOW_NAMES.items():
         run = latest.get(path)
         if run is None or run.get("status") != "completed" or run.get("conclusion") == "action_required":
-            note(f"Waiting for the {name} workflow to finish at `{short(sha)}`.")
+            note(f"Waiting for the {name} workflow to finish on #{number} at `{short(sha)}`.")
             return None
         if not one_of(run.get("conclusion"), PASSED + FAILED):
-            note(f"The {name} workflow did not finish at `{short(sha)}`; nothing to do.")
+            note(f"The {name} workflow did not finish on #{number} at `{short(sha)}`; nothing to do.")
             return None
     return latest
 
@@ -898,9 +982,7 @@ def failure_list(failures: list[dict]) -> list[str]:
 
 def request_fix(github: GitHub, repo: str, pull: dict, sha: str, kind: str, failures: list[dict]) -> None:
     number = pull["number"]
-    login = github.get("user", agent=True).get("login")
-    if not isinstance(login, str) or not login:
-        raise RemediationError("Could not identify the user behind COPILOT_REMEDIATION_TOKEN.")
+    login = agent_login(github)
     bodies = [
         comment["body"] for comment in github.pages(f"repos/{repo}/issues/{number}/comments")
         if field(comment, "user", "login") == login and isinstance(comment.get("body"), str)

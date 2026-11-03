@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Process every audit in order; runs for an outdated default-branch commit change nothing.
+    # The feedback workflow shares this queue, so fix requests are never posted concurrently.
     concurrency:
       group: dependency-remediation
       queue: max
