@@ -348,8 +348,9 @@ secret scanning, Dependabot alerts, and CodeQL remain enabled.
 
 Dependency findings on `main` open a tracking issue. Once a maintainer adds the
 `COPILOT_REMEDIATION_TOKEN` secret, Copilot cloud agent is assigned to propose
-a fix as a pull request and is asked to fix failed checks on its own and
-Dependabot pull requests. Maintainers still review and merge every fix. See
+a fix as a pull request and is asked to fix failed checks on its own pull
+requests and on Dependabot updates of the vulnerable packages. Maintainers
+still review and merge every fix. See
 [Automatic dependency remediation](docs/security-checks.md#automatic-dependency-remediation)
 for setup.
 

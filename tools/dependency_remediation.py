@@ -50,6 +50,10 @@ MAX_FAILURES = 20
 SERVER = "https://github.com"
 ISSUE_MARKER = "<!-- app-activity:dependency-remediation fingerprint={} -->"
 ISSUE_PATTERN = re.compile(r"<!-- app-activity:dependency-remediation fingerprint=([0-9a-f]{16}) -->")
+PACKAGES_MARKER = "<!-- app-activity:dependency-remediation packages={} -->"
+PACKAGES_PATTERN = re.compile(r"<!-- app-activity:dependency-remediation packages=([a-z0-9,-]*) -->")
+PIP_UPDATES = "dependabot/pip/"
+VERSION_SEPARATOR = re.compile(r"-(?=[0-9])")
 CI_MARKER = "<!-- app-activity:dependency-remediation-ci sha={} -->"
 CI_PATTERN = re.compile(r"<!-- app-activity:dependency-remediation-ci sha=([0-9a-f]{40}) -->")
 LIMIT_MARKER = "<!-- app-activity:dependency-remediation-ci limit -->"
@@ -57,6 +61,7 @@ REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")
 PACKAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9.!+_-]{0,63}")
+RELEASE = re.compile(r"[0-9]+(?:\.[0-9]+)*")
 ADVISORY = re.compile(r"[A-Z][A-Z0-9]*(?:-[A-Za-z0-9]+)+")
 SHA = re.compile(r"[0-9a-f]{40}")
 CLOSING = re.compile(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+#(\d{1,10})\b")
@@ -119,9 +124,13 @@ def clean(name: object) -> str:
     return text or "unnamed"
 
 
-def entries(values: list, pattern: re.Pattern[str], exclude: str = "") -> list[str]:
-    unique = {value for value in values if matches(pattern, value, 64) and value != exclude}
-    return sorted(unique, key=order)[:MAX_ENTRIES]
+def all_match(values: object, pattern: re.Pattern[str]) -> bool:
+    return isinstance(values, list) and all(matches(pattern, value, 64) for value in values)
+
+
+def entries(values: list[str], exclude: str = "") -> list[str]:
+    # Keep the newest entries, so the highest fixed release survives truncation.
+    return sorted(set(values) - {exclude}, key=order)[-MAX_ENTRIES:]
 
 
 def short(sha: str) -> str:
@@ -374,25 +383,22 @@ def parse_report(content: bytes, python: str, head: str) -> dict:
     if document["revision"] != head and not (status == "error" and document["revision"] is None):
         raise RemediationError(f"The Python {python} findings report audited a different commit.")
     parsed = []
+    # Any malformed value rejects the whole report, so a partial findings list never replaces the tracked one.
     for finding in findings:
         if (
             not isinstance(finding, dict) or set(finding) != FINDING_KEYS
-            or not isinstance(finding["fix_versions"], list) or not isinstance(finding["aliases"], list)
+            or not matches(PACKAGE, finding["package"], 100) or not matches(VERSION, finding["version"], 64)
+            or not matches(ADVISORY, finding["advisory"], 64)
+            or not all_match(finding["fix_versions"], VERSION) or not all_match(finding["aliases"], ADVISORY)
         ):
             raise RemediationError(failure)
-        package, version, advisory = finding["package"], finding["version"], finding["advisory"]
-        if not (matches(PACKAGE, package, 100) and matches(VERSION, version, 64) and matches(ADVISORY, advisory, 64)):
-            note(f"Ignored a malformed finding in the Python {python} report.", warning=True)
-            continue
         parsed.append({
-            "package": canonical(package),
-            "version": version,
-            "advisory": advisory,
-            "fix_versions": entries(finding["fix_versions"], VERSION),
-            "aliases": entries(finding["aliases"], ADVISORY, exclude=advisory),
+            "package": canonical(finding["package"]),
+            "version": finding["version"],
+            "advisory": finding["advisory"],
+            "fix_versions": entries(finding["fix_versions"]),
+            "aliases": entries(finding["aliases"], exclude=finding["advisory"]),
         })
-    if status == "vulnerable" and not parsed:
-        raise RemediationError(failure)
     return {"status": status, "findings": parsed}
 
 
@@ -407,7 +413,7 @@ def aggregate(reports: dict[str, dict | None]) -> tuple[list[dict], list[str]]:
                 "fix_versions": [], "aliases": [], "pythons": [],
             })
             for name in ("fix_versions", "aliases"):
-                entry[name] = sorted(set(entry[name]) | set(finding[name]), key=order)[:MAX_ENTRIES]
+                entry[name] = entries(entry[name] + finding[name])
             entry["pythons"].append(python)
     findings = sorted(
         combined.values(), key=lambda entry: (entry["package"], order(entry["version"]), entry["advisory"]),
@@ -438,6 +444,11 @@ def tracked(issue: dict) -> bool:
 
 def marker(issue: dict) -> str:
     return ISSUE_PATTERN.search(issue["body"]).group(1)
+
+
+def issue_packages(issue: dict) -> list[str]:
+    found = PACKAGES_PATTERN.search(issue["body"])
+    return [package for package in found.group(1).split(",") if package] if found else []
 
 
 def remediation_issues(github: GitHub, repo: str) -> list[dict]:
@@ -522,8 +533,10 @@ def issue_body(
     digest: str, repo: str, branch: str, run_id: int, head: str, findings: list[dict], missing: list[str],
 ) -> str:
     url = run_url(repo, run_id)
+    packages = sorted({finding["package"] for finding in findings})[:MAX_ROWS]
     lines = [
         ISSUE_MARKER.format(digest),
+        PACKAGES_MARKER.format(",".join(packages)),
         f"## Vulnerable dependencies on `{branch}`",
         "",
         f"The [Security workflow run]({url}) audited `{short(head)}` and found these known vulnerabilities:",
@@ -569,7 +582,7 @@ def issue_body(
         "---",
         "This issue is managed by the Dependency remediation workflow. To opt out of these exact findings, close it "
         "as not planned. To retry, unassign Copilot; the next audit or a manual run of the workflow assigns it "
-        f"again. Keep the `{LABEL}` label and the hidden marker comment so the workflow can track this issue.",
+        f"again. Keep the `{LABEL}` label and the hidden marker comments so the workflows can track this issue.",
     ]
     return "\n".join(lines) + "\n"
 
@@ -617,10 +630,13 @@ def assign(github: GitHub, repo: str, branch: str, issue: dict, findings: list[d
             warning=True,
         )
         return
-    covered = dependabot_coverage(github, repo, branch, fixable)
+    covered = dependabot_coverage(github, repo, branch, findings)
     if len(covered) == len(fixable):
         updated = ", ".join(covered)
-        note(f"Open Dependabot pull requests already update {updated}; Copilot was not assigned to #{number}.")
+        note(
+            f"Open Dependabot pull requests already update {updated} to fixed versions; "
+            f"Copilot was not assigned to #{number}."
+        )
         return
     instructions = [
         f"Resolve issue #{number} by following the instructions in its description.",
@@ -632,7 +648,10 @@ def assign(github: GitHub, repo: str, branch: str, issue: dict, findings: list[d
     ]
     if covered:
         updated = ", ".join(covered)
-        instructions.append(f"Open Dependabot pull requests already update {updated}; leave those packages unchanged.")
+        instructions.append(
+            f"Open Dependabot pull requests already update {updated} to fixed versions; leave those packages "
+            "unchanged."
+        )
     if unfixable:
         pending = ", ".join(unfixable)
         instructions.append(
@@ -661,17 +680,49 @@ def assign(github: GitHub, repo: str, branch: str, issue: dict, findings: list[d
     note(f"Assigned Copilot to #{number}.")
 
 
-def dependabot_coverage(github: GitHub, repo: str, branch: str, packages: list[str]) -> list[str]:
+def dependabot_update(pull: dict, repo: str) -> bool:
+    ref = field(pull, "head", "ref")
+    return (
+        field(pull, "user", "login") == DEPENDABOT and isinstance(ref, str) and ref.startswith(PIP_UPDATES)
+        and field(pull, "head", "repo", "full_name") == repo
+    )
+
+
+def proposed_version(name: str, package: str) -> str | None:
+    # Dependabot names pip update branches <package>-<version>, and package names can contain "-<digit>".
+    for separator in VERSION_SEPARATOR.finditer(name):
+        version = name[separator.end():]
+        if canonical(name[:separator.start()]) == package and matches(VERSION, version, 64) and "-" not in version:
+            return version
+    return None
+
+
+def resolves(version: str, fixes: list[str]) -> bool:
+    # A listed fixed release resolves the advisory, and so does a final release newer than every listed one.
+    # Only plain releases are compared, because order() is not full PEP 440 and ranks 2.0rc1 above 2.0.
+    proposed = order(version)[0]
+    fixed = [order(fix)[0] for fix in fixes]
+    if proposed in fixed:
+        return True
+    return all(RELEASE.fullmatch(value) for value in (version, *fixes)) and proposed >= max(fixed)
+
+
+def dependabot_coverage(github: GitHub, repo: str, branch: str, findings: list[dict]) -> list[str]:
+    required: dict[str, list[list[str]]] = {}
+    for finding in findings:
+        if finding["fix_versions"]:
+            required.setdefault(finding["package"], []).append(finding["fix_versions"])
     query = urllib.parse.urlencode({"state": "open", "base": branch})
-    refs = []
-    for pull in github.pages(f"repos/{repo}/pulls?{query}"):
-        ref = field(pull, "head", "ref")
-        if (
-            field(pull, "user", "login") == DEPENDABOT and isinstance(ref, str) and ref.startswith("dependabot/")
-            and field(pull, "head", "repo", "full_name") == repo
-        ):
-            refs.append(canonical(ref.rsplit("/", 1)[-1]))
-    return [package for package in packages if any(re.match(re.escape(package) + "-[0-9]", ref) for ref in refs)]
+    names = [
+        pull["head"]["ref"].rsplit("/", 1)[-1]
+        for pull in github.pages(f"repos/{repo}/pulls?{query}") if dependabot_update(pull, repo)
+    ]
+    covered = []
+    for package, fixes in sorted(required.items()):
+        versions = [version for name in names if (version := proposed_version(name, package)) is not None]
+        if any(all(resolves(version, fix_versions) for fix_versions in fixes) for version in versions):
+            covered.append(package)
+    return covered
 
 
 def closing_references(pull: dict) -> list[int]:
@@ -757,10 +808,16 @@ def find_pull(github: GitHub, repo: str, branch: str, head_branch: str, sha: str
 
 
 def eligible(github: GitHub, repo: str, branch: str, pull: dict) -> str | None:
-    ref = field(pull, "head", "ref")
-    if field(pull, "user", "login") == DEPENDABOT and isinstance(ref, str) and ref.startswith("dependabot/"):
-        return "dependabot"
-    if copilot_pull(pull, repo, branch):
+    if dependabot_update(pull, repo):
+        # The open remediation issue is the trusted record of which packages are currently vulnerable.
+        name = pull["head"]["ref"].rsplit("/", 1)[-1]
+        packages = {
+            package for issue in remediation_issues(github, repo) if issue["state"] == "open"
+            for package in issue_packages(issue)
+        }
+        if any(proposed_version(name, package) is not None for package in packages):
+            return "dependabot"
+    elif copilot_pull(pull, repo, branch):
         for reference in closing_references(pull):
             try:
                 issue = github.get(f"repos/{repo}/issues/{reference}")
@@ -770,7 +827,10 @@ def eligible(github: GitHub, repo: str, branch: str, pull: dict) -> str | None:
                 raise
             if tracked(issue) and issue["state"] == "open":
                 return "copilot"
-    note(f"#{pull['number']} is not a Dependabot or dependency remediation pull request; nothing to do.")
+    note(
+        f"#{pull['number']} is not a Dependabot pip update or Copilot pull request for an open dependency "
+        "remediation issue; nothing to do."
+    )
     return None
 
 

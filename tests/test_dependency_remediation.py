@@ -61,11 +61,12 @@ def security_run(**values: object) -> dict:
 
 def tracked_issue(
     number: int = 5, digest: str = "0" * 16, state: str = "open", reason: str | None = None,
-    assignees: tuple[str, ...] = ("Copilot",),
+    assignees: tuple[str, ...] = ("Copilot",), packages: str = "requests",
 ) -> dict:
+    markers = (remediation.ISSUE_MARKER.format(digest), remediation.PACKAGES_MARKER.format(packages))
     return {
         "number": number, "user": {"login": remediation.ISSUE_AUTHOR}, "state": state, "state_reason": reason,
-        "labels": [{"name": remediation.LABEL}], "body": remediation.ISSUE_MARKER.format(digest) + "\nFindings",
+        "labels": [{"name": remediation.LABEL}], "body": "\n".join((*markers, "Findings")),
         "assignees": [{"login": login} for login in assignees],
     }
 
@@ -131,19 +132,20 @@ class ReportTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         os.environ.pop("GITHUB_STEP_SUMMARY", None)
 
-    def test_parse_report_normalizes_findings_and_skips_malformed_entries(self) -> None:
+    def test_parse_report_normalizes_findings(self) -> None:
+        releases = tuple(f"2.{minor}.0" for minor in range(12))
         document = report("3.12", findings=[
-            finding("Requests_Toolbelt", ("10.0", "2.0.0", "bad version", "2.0.0"), aliases=[ADVISORY, "CVE-1", 7]),
-            finding("bad package!"),
+            finding("Requests_Toolbelt", ("10.0", "2.0.0", "2.0.0"), aliases=[ADVISORY, "CVE-1", "CVE-1"]),
+            finding("requests", releases),
         ])
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            parsed = remediation.parse_report(json.dumps(document).encode("utf-8"), "3.12", HEAD)
+        parsed = remediation.parse_report(json.dumps(document).encode("utf-8"), "3.12", HEAD)
         self.assertEqual(parsed, {"status": "vulnerable", "findings": [{
             "package": "requests-toolbelt", "version": "2.31.0", "advisory": ADVISORY,
             "fix_versions": ["2.0.0", "10.0"], "aliases": ["CVE-1"],
+        }, {
+            "package": "requests", "version": "2.31.0", "advisory": ADVISORY,
+            "fix_versions": list(releases[2:]), "aliases": ["CVE-2024-35195"],
         }]})
-        self.assertIn("::warning::Ignored a malformed finding in the Python 3.12 report.", output.getvalue())
 
     def test_parse_report_rejects_inconsistent_documents(self) -> None:
         cases = {
@@ -153,7 +155,12 @@ class ReportTests(unittest.TestCase):
             "wrong Python": report("3.12"),
             "boolean schema": {**report("3.11"), "schema": True},
             "extra key": {**report("3.11"), "extra": 1},
-            "only malformed findings": report("3.11", findings=[finding("bad package!")]),
+            "malformed package": report("3.11", findings=[finding(), finding("bad package!")]),
+            "malformed version": report("3.11", findings=[finding(version="bad version")]),
+            "malformed advisory": report("3.11", findings=[finding(advisory="not-an-advisory")]),
+            "malformed fix version": report("3.11", findings=[finding(fix_versions=("2.32.0", "bad version"))]),
+            "non-string alias": report("3.11", findings=[finding(aliases=["CVE-1", 7])]),
+            "malformed alias": report("3.11", findings=[finding(aliases=["cve 1"])]),
             "finding without aliases list": report("3.11", findings=[finding(aliases="CVE-1")]),
         }
         for name, document in cases.items():
@@ -300,6 +307,7 @@ class RemediateTests(WorkflowFixture):
         self.assertEqual(created["labels"], [remediation.LABEL])
         body = created["body"]
         self.assertTrue(body.startswith(remediation.ISSUE_MARKER.format(current_digest())))
+        self.assertEqual(body.splitlines()[1], remediation.PACKAGES_MARKER.format("requests"))
         self.assertIn(
             f"| `requests` | `2.31.0` | [{ADVISORY}](https://osv.dev/vulnerability/{ADVISORY}) | CVE-2024-35195 "
             "| `2.32.0` | 3.11, 3.12, 3.13, 3.14 |",
@@ -422,14 +430,36 @@ class AssignmentTests(WorkflowFixture):
         pulls = [dependabot_pull(3, ref="dependabot/pip/Requests-2.32.0"), human]
         github = FakeGitHub({("GET", PULLS): pulls})
         output = self.assign(github, [finding("requests")])
-        self.assertIn("Open Dependabot pull requests already update requests; Copilot was not assigned to #7.", output)
+        self.assertIn(
+            "Open Dependabot pull requests already update requests to fixed versions; Copilot was not assigned to #7.",
+            output,
+        )
         self.assertEqual(changes(github), [])
         assigned = {"assignees": [{"login": remediation.COPILOT_ASSIGNEE}]}
         github = FakeGitHub({("GET", PULLS): pulls, ("POST", f"repos/{REPO}/issues/7/assignees"): assigned})
         self.assign(github, [finding("requests"), finding("urllib3", ("2.2.2",)), finding("zipp", ())])
         instructions = github.sent("POST")[0][1]["agent_assignment"]["custom_instructions"]
-        self.assertIn("already update requests; leave those packages unchanged.", instructions)
+        self.assertIn("already update requests to fixed versions; leave those packages unchanged.", instructions)
         self.assertIn("No fixed release exists yet for zipp;", instructions)
+
+    def test_dependabot_coverage_requires_a_fixed_version_for_every_advisory(self) -> None:
+        second = finding("requests", ("2.32.4",), advisory="GHSA-9hjg-9r4m-mvj7")
+        cases = {
+            "stale version": ("dependabot/pip/requests-2.31.1", [finding("requests")], []),
+            "newer version": ("dependabot/pip/requests-2.33.0", [finding("requests")], ["requests"]),
+            "pre-release of the fix": ("dependabot/pip/requests-2.32.0rc1", [finding("requests")], []),
+            "listed pre-release fix": ("dependabot/pip/requests-2.32.0rc1", [finding("requests", ("2.32.0rc1",))],
+                                       ["requests"]),
+            "one of two advisories": ("dependabot/pip/requests-2.32.0", [finding("requests"), second], []),
+            "both advisories": ("dependabot/pip/requests-2.32.4", [finding("requests"), second], ["requests"]),
+            "digit in package name": ("dependabot/pip/django-2fa-1.2.0", [finding("django-2fa", ("1.2.0",))],
+                                      ["django-2fa"]),
+            "other ecosystem": ("dependabot/github_actions/requests-2.33.0", [finding("requests")], []),
+        }
+        for name, (ref, findings, covered) in cases.items():
+            with self.subTest(name):
+                github = FakeGitHub({("GET", PULLS): [dependabot_pull(3, ref=ref)]})
+                self.assertEqual(remediation.dependabot_coverage(github, REPO, "main", findings), covered)
 
     def test_silently_ignored_assignment_fails_the_run(self) -> None:
         github = FakeGitHub({
@@ -472,6 +502,7 @@ def feedback_routes(pull: dict, runs: list[dict] | None = None, comments: list[d
     routes.update({
         ("GET", f"repos/{REPO}/actions/runs/{RUN_ID}"): pr_run(branch=branch),
         ("GET", f"repos/{REPO}/pulls?{query}"): [pull],
+        ("GET", ISSUES): [tracked_issue()],
         ("GET", f"repos/{REPO}/actions/runs?head_sha={PR_SHA}&event=pull_request"): {"workflow_runs": runs},
         ("GET", f"repos/{REPO}/actions/runs/{RUN_ID}/jobs?filter=latest"): {"jobs": jobs},
         ("GET", "user"): {"login": "maintainer"},
@@ -558,10 +589,16 @@ class FeedbackTests(WorkflowFixture):
         untracked[("GET", f"repos/{REPO}/issues/40")] = {"number": 40, "user": {"login": "octocat"}, "state": "open"}
         pushed = feedback_routes(dependabot_pull())
         pushed[("GET", f"repos/{REPO}/actions/runs/{RUN_ID}")] = pr_run(event="push")
-        ignored = "is not a Dependabot or dependency remediation pull request"
+        resolved = feedback_routes(dependabot_pull())
+        resolved[("GET", ISSUES)] = [tracked_issue(state="closed", reason="completed")]
+        ignored = "is not a Dependabot pip update or Copilot pull request for an open dependency remediation issue"
         cases = {
             "human pull request": (human, ignored),
             "untracked issue": (untracked, ignored),
+            "other ecosystem": (feedback_routes(dependabot_pull(ref="dependabot/github_actions/actions/checkout-4.2.0")),
+                                ignored),
+            "unlisted package": (feedback_routes(dependabot_pull(ref="dependabot/pip/flask-3.0.0")), ignored),
+            "closed remediation issue": (resolved, ignored),
             "push run": (pushed, "is not a completed pull request check from this repository"),
         }
         for name, (routes, message) in cases.items():

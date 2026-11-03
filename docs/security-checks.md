@@ -89,20 +89,22 @@ The `Dependency remediation` workflow runs on `main` after each `Security` run
 for a push to `main`, the weekly schedule, or a manual run. It acts only on an
 audit of the current `main` head and combines the findings reports from all
 four Python versions. Running it manually from `main` processes the newest
-finished audit of the current head.
+finished audit of the current head. Manual runs from other branches are
+skipped, so only reviewed code on `main` can use the remediation token.
 
 - **New findings** open one issue labeled `dependency-remediation`. The issue
   lists each vulnerable package, installed version, advisory, fixed versions,
   and affected Python versions, with instructions for the fix. A hidden
   fingerprint stops later audits with the same findings from opening another
-  issue.
+  issue, and a hidden package list identifies the Dependabot pull requests
+  that belong to the remediation.
 - **Copilot cloud agent** is then assigned to the issue and opens a pull
   request. It is not assigned when the `COPILOT_REMEDIATION_TOKEN` secret is
   missing, when no finding has a fixed release yet, or when open Dependabot
-  pull requests already update every fixable package. It is told to leave a
-  package unchanged when Dependabot already updates it or no fix exists. If
-  Copilot is unassigned while the issue is open, the next run assigns it
-  again.
+  pull requests already update every fixable package to a version that
+  resolves all of its advisories. It is told to leave a package unchanged when
+  such a Dependabot pull request exists or no fix exists. If Copilot is
+  unassigned while the issue is open, the next run assigns it again.
 - **Changed findings** update the open issue, add a comment, and ask Copilot to
   update any open Copilot pull request that references the issue with
   `Fixes #<issue>`.
@@ -111,7 +113,8 @@ finished audit of the current head.
 - **An incomplete audit**, where a report is missing, expired, or records a
   failed audit, never closes issues. Any findings it does report are still
   tracked, and the issue notes that the list may be partial. A malformed
-  report fails the workflow run.
+  report, including a single malformed finding, fails the workflow run instead
+  of replacing the tracked findings with a partial list.
 
 The `Dependency remediation feedback` workflow catches bugs that an upgrade
 causes elsewhere in the code. It runs when the `Security` or
@@ -120,11 +123,13 @@ request branch in this repository, and waits until both have finished for the
 pull request's latest commit. If any check failed, it comments `@copilot` with
 the failed jobs and steps and asks Copilot to fix the root cause. On
 Dependabot pull requests, Copilot keeps the updated version and adapts the code
-instead of reverting it. Copilot pull requests qualify only when they reference
-an open remediation issue with `Fixes #<issue>`. Each commit is reported once,
-and after three requests on a pull request the workflow asks a maintainer to
-take over. It uses only the GitHub API and never checks out or runs pull
-request code.
+instead of reverting it. Dependabot pull requests qualify only when they update
+a pip package listed in an open remediation issue, so GitHub Actions and other
+unrelated updates are left alone. Copilot pull requests qualify only when they
+reference an open remediation issue with `Fixes #<issue>`. Each commit is
+reported once, and after three requests on a pull request the workflow asks a
+maintainer to take over. It uses only the GitHub API and never checks out or
+runs pull request code.
 
 ### Setup
 
@@ -159,8 +164,9 @@ missing secret prevents. You can also assign Copilot to an issue manually.
 - Removing the `COPILOT_REMEDIATION_TOKEN` secret stops Copilot assignments and
   fix requests while issues are still tracked. Disable both workflows in the
   **Actions** tab to stop all automation.
-- Keep the `dependency-remediation` label and the hidden marker in the issue
-  description; the workflows use them to find the issue.
+- Keep the `dependency-remediation` label and the hidden markers in the issue
+  description; the workflows use them to find the issue and its vulnerable
+  packages.
 - Neither workflow suppresses advisories, approves reviews or workflow runs,
   merges, force-pushes, or changes repository settings.
 
@@ -244,8 +250,8 @@ refuses to run outside GitHub Actions or from any branch except the default
 branch. The workflows use SHA-pinned actions and checkout without persisted
 credentials. Their built-in token is read-only, except that the remediation
 job can write issues. `COPILOT_REMEDIATION_TOKEN` is used only to assign
-Copilot and to comment on remediation and Dependabot pull requests. Unit tests
-run the tool against a simulated GitHub API.
+Copilot and to comment on eligible Copilot and Dependabot pull requests. Unit
+tests run the tool against a simulated GitHub API.
 
 ## Remediation and exceptions
 

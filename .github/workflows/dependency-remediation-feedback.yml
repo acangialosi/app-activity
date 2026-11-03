@@ -1,6 +1,6 @@
 name: Dependency remediation feedback
 
-# Asks Copilot cloud agent to fix failed checks on Dependabot and dependency remediation pull requests.
+# Asks Copilot cloud agent to fix failed checks on Copilot and Dependabot pull requests for open dependency remediation issues.
 # It reads check results through the API; it never checks out or runs pull request code.
 on:
   workflow_run:
