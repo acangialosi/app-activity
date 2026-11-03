@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -64,10 +64,10 @@ class HeaderTests(unittest.TestCase):
         for period in ("hour", "day", "week", "month", "year"):
             labels[period] = []
             for now in (
-                datetime(2026, 10, 22, 11, tzinfo=timezone.utc),
-                datetime(2026, 10, 23, 12, tzinfo=timezone.utc),
-                datetime(2026, 9, 30, 23, tzinfo=timezone.utc),
-                datetime(2026, 5, 1, 0, tzinfo=timezone.utc),
+                datetime(2026, 10, 22, 11).astimezone(),
+                datetime(2026, 10, 23, 12).astimezone(),
+                datetime(2026, 9, 30, 23).astimezone(),
+                datetime(2026, 5, 1, 0).astimezone(),
             ):
                 start, end, _ = _period_bounds(period, now, 0)
                 labels[period].append(_period_label(period, start, end))
@@ -211,7 +211,7 @@ check().then(() => document.getElementById("result").textContent = JSON.stringif
         parser.feed(HTML)
         parser.close()
         reports = {}
-        now = datetime(2026, 9, 30, 11, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 30, 11).astimezone()
         for period in ("hour", "day", "week", "month", "year"):
             reports[period] = {}
             for offset in (0, -1, -2):

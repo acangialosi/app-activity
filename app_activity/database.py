@@ -5,11 +5,15 @@ import sqlite3
 import threading
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from .app_classification import uses_title_details
+
+
+_SEGMENT_NAME = "CASE WHEN is_idle THEN 'Idle' ELSE app_name END"
 
 
 @dataclass(frozen=True)
@@ -23,14 +27,25 @@ class ActivityState:
 
 
 class ActivityDatabase:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, read_only: bool = False) -> None:
         self.path = path
+        self.read_only = read_only
         self._local = threading.local()
         self._migrated_aliases: set[tuple[str, str]] = set()
         self._migrated_detail_apps: set[str] = set()
-        self._initialize()
+        if not read_only:
+            self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
+        if self.read_only:
+            # mode=ro never creates the database and opens it read-only, so
+            # neither queries nor WAL checkpoints can change it. SQLite may
+            # still create the -wal and -shm files it needs to read WAL data.
+            connection = sqlite3.connect(
+                _read_only_uri(self.path), uri=True, timeout=10
+            )
+            connection.execute("PRAGMA query_only=ON")
+            return connection
         connection = sqlite3.connect(self.path, timeout=10)
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=NORMAL")
@@ -309,6 +324,8 @@ class ActivityDatabase:
             "timeline": [
                 {
                     "label": bucket["label"],
+                    "start": bucket["start"].isoformat(),
+                    "end": bucket["end"].isoformat(),
                     "capacity_seconds": round(
                         (
                             bucket["end"] - bucket["start"]
@@ -362,6 +379,115 @@ class ActivityDatabase:
             for start, end, app_name, is_idle, window_title in rows
         ]
 
+    def segments(
+        self,
+        start_ts: float,
+        end_ts: float,
+        *,
+        application: str | None = None,
+        include_idle: bool = True,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[int, list[tuple[int, int, str, bool, str]]]:
+        """Return the number of matching segments and one page of them.
+
+        Rows are clipped to the range like export_rows, then rounded to whole
+        seconds; segments that round to zero length are excluded. Idle
+        segments are named "Idle". The application filter is a
+        case-insensitive exact match.
+        """
+        # CAST truncates, so adding 0.5 rounds these positive timestamps.
+        rounded_start = "CAST(MAX(start_ts, ?) + 0.5 AS INTEGER)"
+        rounded_end = "CAST(MIN(end_ts, ?) + 0.5 AS INTEGER)"
+        conditions = [
+            "end_ts > ?",
+            "start_ts < ?",
+            f"{rounded_end} > {rounded_start}",
+        ]
+        parameters: list[Any] = [start_ts, end_ts, end_ts, start_ts]
+        if not include_idle:
+            conditions.append("is_idle = 0")
+        connection = self._connection()
+        # One read transaction keeps the count and the page consistent while
+        # the service is recording.
+        began = not connection.in_transaction
+        if began:
+            connection.execute("BEGIN")
+        try:
+            if application is not None:
+                # SQLite only folds ASCII case, so match names in Python.
+                wanted = application.strip().casefold()
+                range_filter = " AND ".join(conditions)
+                names = [
+                    str(name)
+                    for (name,) in connection.execute(
+                        f"""
+                        SELECT DISTINCT {_SEGMENT_NAME}
+                        FROM activity_segments
+                        WHERE {range_filter}
+                        """,
+                        parameters,
+                    )
+                    if str(name).strip().casefold() == wanted
+                ]
+                if not names:
+                    return 0, []
+                placeholders = ", ".join("?" for _ in names)
+                conditions.append(f"{_SEGMENT_NAME} IN ({placeholders})")
+                parameters.extend(names)
+            where = " AND ".join(conditions)
+            (total,) = connection.execute(
+                f"SELECT COUNT(*) FROM activity_segments WHERE {where}",
+                parameters,
+            ).fetchone()
+            rows = connection.execute(
+                f"""
+                SELECT {rounded_start}, {rounded_end}, {_SEGMENT_NAME},
+                    is_idle, window_title
+                FROM activity_segments
+                WHERE {where}
+                ORDER BY start_ts, id
+                LIMIT ? OFFSET ?
+                """,
+                [
+                    start_ts,
+                    end_ts,
+                    *parameters,
+                    -1 if limit is None else limit,
+                    offset,
+                ],
+            ).fetchall()
+        finally:
+            if began:
+                connection.rollback()
+        return int(total), [
+            (
+                int(start),
+                int(end),
+                str(app_name),
+                bool(is_idle),
+                str(window_title),
+            )
+            for start, end, app_name, is_idle, window_title in rows
+        ]
+
+    def recorded_range(self) -> tuple[float, float] | None:
+        first, last = self._connection().execute(
+            "SELECT MIN(start_ts), MAX(end_ts) FROM activity_segments"
+        ).fetchone()
+        if first is None:
+            return None
+        return float(first), float(last)
+
+
+def _read_only_uri(path: Path) -> str:
+    # Path.as_uri() writes UNC paths as file://server/share, which SQLite
+    # rejects, so always use an empty authority.
+    location = quote(path.resolve().as_posix(), safe="/:")
+    if not location.startswith("/"):
+        location = f"/{location}"
+    return f"file://{location}?mode=ro"
+
 
 def _legacy_detail_key(app_name: str, window_title: str) -> str:
     if uses_title_details(app_name):
@@ -377,13 +503,42 @@ def _report_detail_key(
     return detail_key or _legacy_detail_key(app_name, window_title)
 
 
+def _local_time(moment: datetime) -> datetime:
+    # Naive values are local wall-clock times. Python resolves skipped and
+    # repeated times with the UTC offset in effect before the change.
+    return moment.astimezone()
+
+
+def _localize(moment: datetime, fallback: tzinfo | None) -> datetime:
+    try:
+        local = _local_time(moment)
+    except (OverflowError, OSError):
+        # Windows cannot convert times before 1970. Nothing was recorded
+        # then, so the reference UTC offset is close enough.
+        if moment.tzinfo is not None:
+            return moment
+        return moment.replace(tzinfo=fallback)
+    if moment.tzinfo is not None or local.replace(tzinfo=None) == moment:
+        return local
+    # Like zoneinfo, a skipped wall-clock time keeps its wall clock with the
+    # UTC offset in effect before the change.
+    utc = local.astimezone(timezone.utc).replace(tzinfo=None)
+    return moment.replace(tzinfo=timezone(moment - utc))
+
+
 def _period_bounds(
     period: str, now: datetime, offset: int = 0
 ) -> tuple[datetime, datetime, list[dict[str, Any]]]:
+    now = _local_time(now)
+    reference = now.tzinfo
     if period == "hour":
-        start = now.replace(
-            minute=0, second=0, microsecond=0
-        ) + timedelta(hours=offset)
+        # Step in absolute time so repeated and skipped clock hours stay
+        # distinct, then show the hour with its own UTC offset.
+        start = _localize(
+            now.replace(minute=0, second=0, microsecond=0)
+            + timedelta(hours=offset),
+            reference,
+        )
         end = start + timedelta(hours=1)
         buckets = [
             {
@@ -395,7 +550,11 @@ def _period_bounds(
             }
             for minute in range(0, 60, 5)
         ]
-    elif period == "day":
+        return start, end, buckets
+    # Other periods follow local wall-clock dates, and each boundary gets its
+    # own UTC offset, so a day lasts 23 or 25 hours when DST starts or ends.
+    now = now.replace(tzinfo=None)
+    if period == "day":
         start = now.replace(
             hour=0, minute=0, second=0, microsecond=0
         ) + timedelta(days=offset)
@@ -474,7 +633,18 @@ def _period_bounds(
             )
     else:
         raise ValueError(f"Unsupported period: {period}")
-    return start, end, buckets
+    return (
+        _localize(start, reference),
+        _localize(end, reference),
+        [
+            {
+                **bucket,
+                "start": _localize(bucket["start"], reference),
+                "end": _localize(bucket["end"], reference),
+            }
+            for bucket in buckets
+        ],
+    )
 
 
 def _period_label(period: str, start: datetime, end: datetime) -> str:
