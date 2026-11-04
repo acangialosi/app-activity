@@ -120,6 +120,11 @@ omit private information from anything you enter or upload.
 
 **[Download the latest App Activity installer](https://github.com/acangialosi/app-activity/releases/download/nightly/AppActivity-Setup.exe)**
 
+This link is the rolling nightly build, which is unsigned. Installers on
+[versioned releases](https://github.com/acangialosi/app-activity/releases) are
+code-signed once signing is configured; see
+[Code signing policy](#code-signing-policy).
+
 The installer includes the Python runtime, installs for the current user, and
 starts App Activity automatically at sign-in.
 
