@@ -215,10 +215,12 @@ jobs:
         run: |
           $installer = "artifacts\AppActivity-Setup.exe"
           $metadata = "artifacts\AppActivity-update.json"
-          $releases = @(
-            gh release list --limit 100 --json tagName | ConvertFrom-Json
-          )
-          if ($releases.tagName -contains $env:GITHUB_REF_NAME) {
+          # Windows PowerShell turns native stderr into a terminating error under Stop.
+          $ErrorActionPreference = "Continue"
+          gh release view $env:GITHUB_REF_NAME *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+          $ErrorActionPreference = "Stop"
+          if ($releaseExists) {
             gh release upload $env:GITHUB_REF_NAME $installer $metadata --clobber
           } else {
             gh release create $env:GITHUB_REF_NAME $installer $metadata `
