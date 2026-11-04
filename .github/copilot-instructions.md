@@ -6,6 +6,8 @@
   a merged pull request. An implementation request authorizes this full delivery
   workflow without a separate user review, approval, or merge prompt, subject to
   the required checks, reviews, approvals, and repository protections below.
+  Privileged changes are the exception: they need explicit maintainer
+  confirmation before merging (see "Pull requests and review feedback").
   Do not stop at a plan, an initial implementation, local changes, or a
   review-ready pull request when further delivery work is possible.
 - Honor explicit user stopping points, such as a planning checkpoint,
@@ -38,6 +40,10 @@
   relevant existing tests first, then broaden validation as needed.
 - The full test suite is `python -m unittest discover -s tests -v`. When Node.js
   is available, it also runs the dashboard's JavaScript behavior tests.
+- Don't run `install`, `start`, `run`, or `dashboard` (also the default with no
+  command) to validate a change: they start tracking real activity, and
+  `install` also registers sign-in startup. See the README's "Development"
+  section for setup and checks that have no side effects.
 - Use the repository's Windows CI for platform-specific validation and packaged
   builds. Explicitly report any interactive Windows desktop checks that could
   not be performed.
@@ -74,8 +80,18 @@
 - Mark the pull request ready only when the acceptance criteria are verified,
   required checks pass, and the review-feedback process is complete. Then merge
   without waiting for a separate user prompt, unless the user requested an
-  earlier stopping point. Required human approvals must still be obtained;
-  agent review does not replace them.
+  earlier stopping point or the change is privileged (see below). Required
+  human approvals must still be obtained; agent review does not replace them.
+- Privileged changes need explicit maintainer confirmation before merging,
+  even when every check passes. A pull request is privileged if it changes
+  `.github/workflows/`, `.github/dependabot.yml`, these instructions or
+  `AGENTS.md`, security tooling (`tools/ci_security.py`,
+  `tools/update_security_tools.py`, `tools/dependency_remediation.py`,
+  `requirements-security.txt`), `build.ps1` or other signing, packaging, or
+  release logic, or code that uses repository tokens or secrets. Finish the
+  rest of the workflow, leave the pull request ready but unmerged, and ask the
+  maintainer to confirm the merge. An implementation request alone is not
+  confirmation.
 - Verify the pull request was merged before reporting delivery as complete.
   Summarize the delivered outcome, validation evidence, and any remaining
   limitations. For a user-requested earlier stopping point, verify and report

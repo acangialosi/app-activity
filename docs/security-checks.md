@@ -22,6 +22,16 @@ secret push protection are retained. Dependabot automatic security-update PRs
 are enabled in repository settings; these are proposed fixes, not automatic
 merges.
 
+`.github/dependabot.yml` also schedules weekly version updates for GitHub
+Actions (grouped into one PR) and the pinned pip requirements, each waiting
+seven days after a release. Workflow actions are pinned to full commit SHAs,
+which Dependabot updates along with their version comments. pip version
+updates ignore `pip-audit`, which the weekly security tool updater below owns;
+that ignore rule may also suppress Dependabot security updates for
+`pip-audit`, which that updater and Copilot remediation cover instead. pip
+updates are not grouped because remediation identifies Dependabot PRs by their
+`dependabot/pip/<package>-<version>` branch names.
+
 CI checks execute after code reaches GitHub and block merging when they fail.
 They do not prevent the initial upload. GitHub secret push protection provides
 separate server-side rejection for supported credential patterns.

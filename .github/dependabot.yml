@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # Keeps the SHA-pinned workflow actions current. Updates arrive as one weekly pull request
+  # that must pass the same required checks as any other change.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Covers requirements-build.txt (PyInstaller) and requirements-security.txt. pip-audit is
+  # updated by the Security tool updates workflow (tools/update_security_tools.py), so it is
+  # ignored here to avoid two competing pull requests for the same pin.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: pip-audit
