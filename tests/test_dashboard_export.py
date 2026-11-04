@@ -6,6 +6,7 @@ import json
 import threading
 import unittest
 from datetime import datetime, timedelta
+from http.client import HTTPConnection
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.error import HTTPError
@@ -116,6 +117,50 @@ class DashboardExportTests(unittest.TestCase):
                 urlopen(f"{self.base_url}/api/export?{query}", timeout=2)
             with error.exception as response:
                 self.assertEqual(400, response.code)
+
+    def test_untrusted_host_headers_are_rejected(self) -> None:
+        port = self.server.server_port
+        for method, path in (
+            ("GET", "/"),
+            ("GET", "/api/report?period=day"),
+            ("GET", "/api/export?all=1"),
+            ("POST", "/api/update"),
+        ):
+            for host in (
+                None,
+                "evil.example",
+                f"evil.example:{port}",
+                f"127.0.0.1.evil.example:{port}",
+                "127.0.0.1",
+                "127.0.0.1:1",
+            ):
+                with self.subTest(method=method, path=path, host=host):
+                    connection = HTTPConnection("127.0.0.1", port, timeout=2)
+                    try:
+                        connection.putrequest(method, path, skip_host=True)
+                        if host is not None:
+                            connection.putheader("Host", host)
+                        connection.putheader("Origin", f"http://127.0.0.1:{port}")
+                        connection.endheaders()
+                        response = connection.getresponse()
+                        body = response.read()
+                    finally:
+                        connection.close()
+                    self.assertEqual(403, response.status)
+                    self.assertNotIn(b"Browser", body)
+                    self.assertIn("local dashboard address", json.loads(body)["error"])
+
+        for host in (f"127.0.0.1:{port}", f"localhost:{port}", f"LOCALHOST:{port}"):
+            with self.subTest(host=host):
+                connection = HTTPConnection("127.0.0.1", port, timeout=2)
+                try:
+                    connection.request("GET", "/api/export?all=1", headers={"Host": host})
+                    response = connection.getresponse()
+                    body = response.read()
+                finally:
+                    connection.close()
+                self.assertEqual(200, response.status)
+                self.assertIn(b"Browser", body)
 
     def test_unsupported_date_bounds_return_json_error(self) -> None:
         for query in (

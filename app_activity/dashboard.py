@@ -136,7 +136,18 @@ def create_server(database: ActivityDatabase, port: int) -> ThreadingHTTPServer:
     updates = UpdateChecker()
 
     class Handler(BaseHTTPRequestHandler):
+        def _trusted_host(self) -> bool:
+            # Rejecting other Host names blocks DNS-rebinding pages from reading data.
+            port = self.server.server_address[1]
+            host = (self.headers.get("Host") or "").lower()
+            if host in (f"127.0.0.1:{port}", f"localhost:{port}"):
+                return True
+            self._json(403, {"error": "Requests must use the local dashboard address"})
+            return False
+
         def do_POST(self) -> None:
+            if not self._trusted_host():
+                return
             if urlparse(self.path).path == "/api/update":
                 port = self.server.server_address[1]
                 if self.headers.get("Origin") not in (
@@ -150,6 +161,8 @@ def create_server(database: ActivityDatabase, port: int) -> ThreadingHTTPServer:
             self._json(404, {"error": "Not found"})
 
         def do_GET(self) -> None:
+            if not self._trusted_host():
+                return
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self._send(200, "text/html; charset=utf-8", HTML.encode())
