@@ -165,9 +165,10 @@ Pushing a `v*` tag creates a permanent versioned GitHub Release. Manual workflow
 runs produce a downloadable Actions artifact retained for one day without
 creating a release. Every push and pull request must pass the test suite before
 the installer is built, and publishing occurs only after both jobs succeed.
-Only builds of `main` and tags are signed; pull requests and other branches
-build unsigned without access to signing secrets, and only the separate publish
-job can write releases.
+Only `v*` release tags are signed, in a separate job that runs in the protected
+`signing` environment; nightly builds, pull requests, and other branches are
+unsigned and have no signing access, and only the separate publish job can
+write releases. See [Code signing policy](#code-signing-policy).
 
 Updates are downloaded and installed manually; the app never downloads or runs
 an installer automatically. Open **Settings → Updates** and select **Check now** beside the update
@@ -191,7 +192,69 @@ winget install JRSoftware.InnoSetup
 
 The output is `artifacts\AppActivity-Setup.exe`. Set
 `SIGNING_CERTIFICATE_PATH` and optionally `SIGNING_CERTIFICATE_PASSWORD` to
-Authenticode-sign the application and installer during the build.
+Authenticode-sign the application and installer during a local build with a
+PFX certificate. `-Stage App` builds only `dist\AppActivity`, and
+`-Stage Installer` packages an existing `dist\AppActivity`.
+
+### Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io),
+certificate by [SignPath Foundation](https://signpath.org).
+
+- Committers and reviewers: [@acangialosi](https://github.com/acangialosi)
+- Approvers: [@acangialosi](https://github.com/acangialosi)
+
+Only release builds of this repository's own source, produced by its GitHub
+Actions workflow from a `v*` tag, are signed. Each signing request is approved
+manually in SignPath. Nightly builds are unsigned, and Windows SmartScreen may
+warn when you download them.
+
+**Privacy:** this program does not transfer any information to other networked
+systems unless specifically requested by the user or the person installing or
+operating it, with one exception: packaged builds check GitHub for updates
+while the dashboard is open, as described in
+[Privacy and performance](#privacy-and-performance). That check sends no
+activity data. Activity history stays on your PC.
+
+#### Configuring signing
+
+Until the steps below are complete, `v*` tag builds publish unsigned installers
+with a warning.
+
+1. **Apply** to the SignPath Foundation at <https://signpath.org/apply>, and
+   enable multi-factor authentication on GitHub and SignPath.
+2. **Configure SignPath** once the project is accepted:
+   - Install the SignPath GitHub App for this repository and link the
+     *GitHub.com* trusted build system to the project.
+   - Name the project slug `app-activity` and the release signing policy slug
+     `release-signing` (or change `SIGNPATH_PROJECT_SLUG` and
+     `SIGNPATH_SIGNING_POLICY_SLUG` in `.github/workflows/windows-installer.yml`).
+   - Use this default artifact configuration. CI submits the application and
+     the installer as separate requests, each containing a single `.exe`:
+
+     ```xml
+     <?xml version="1.0" encoding="utf-8"?>
+     <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+       <zip-file>
+         <pe-file path="*.exe">
+           <authenticode-sign />
+         </pe-file>
+       </zip-file>
+     </artifact-configuration>
+     ```
+
+3. **Configure GitHub**: in **Settings → Environments**, create a `signing`
+   environment whose deployment branch and tag policy allows only `main` and
+   `v*`. Add the environment secrets `SIGNPATH_API_TOKEN` (an API token for a
+   SignPath CI user with submitter permission) and `SIGNPATH_ORGANIZATION_ID`.
+   For example, `gh secret set SIGNPATH_API_TOKEN --env signing` prompts for
+   the value without echoing it.
+4. **Release**: push a `v*` tag. The **sign** job waits up to 2.5 hours for
+   each of its two signing requests (application, then installer) to be
+   approved in SignPath. Its *Verify signatures* step prints the signer.
+
+Signed installers show "SignPath Foundation" as the publisher. SmartScreen can
+still warn about a newly signed file until it builds reputation from downloads.
 
 ## Use with AI agents (MCP)
 
