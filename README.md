@@ -222,10 +222,13 @@ One-time setup:
    registration the **Artifact Signing Certificate Profile Signer** role.
 4. **Configure GitHub**: in **Settings → Environments → signing**, confirm the
    deployment branch and tag policy allows only `main` and `v*`. Then add these
-   environment variables (they are identifiers, not secrets):
+   **environment secrets**. They are identifiers rather than credentials, but
+   secrets keep them out of public logs:
    `AZURE_CLIENT_ID` (app registration client ID), `AZURE_TENANT_ID`,
    `AZURE_SUBSCRIPTION_ID`, `ARTIFACT_SIGNING_ENDPOINT`,
-   `ARTIFACT_SIGNING_ACCOUNT`, and `ARTIFACT_SIGNING_PROFILE`.
+   `ARTIFACT_SIGNING_ACCOUNT`, and `ARTIFACT_SIGNING_PROFILE`. For example,
+   `gh secret set AZURE_TENANT_ID --env signing` prompts for the value without
+   echoing it.
 5. **Verify**: re-run the **Windows installer** workflow on `main`. The **sign**
    job's *Verify signatures* step prints the signer. In File Explorer, the
    downloaded installer's **Properties → Digital Signatures** shows your
