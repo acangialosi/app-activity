@@ -27,9 +27,8 @@ jobs:
       - name: Run tests
         run: python -m unittest discover --start-directory tests --verbose
 
-  # Builds every change, but signs only trusted main and tag builds. Pull requests and other
-  # branches (including agent branches) build unsigned, receive no signing secrets, and cannot
-  # write to the repository; publishing happens in the separate publish job.
+  # Builds and smoke-tests every change unsigned. This job never has signing access or write
+  # access; trusted main and tag builds hand the unsigned app to the separate sign job.
   build:
     needs: test
     runs-on: windows-latest
@@ -37,7 +36,6 @@ jobs:
       contents: read
     env:
       TRUSTED_BUILD: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
-      PUBLISH: ${{ startsWith(github.ref, 'refs/tags/') || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,25 +49,6 @@ jobs:
         shell: powershell
         run: choco install innosetup --no-progress --yes
 
-      - name: Prepare signing certificate
-        if: env.TRUSTED_BUILD == 'true'
-        shell: powershell
-        env:
-          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          if (-not $env:CERTIFICATE_BASE64) {
-            "No signing certificate is configured; building unsigned."
-            exit 0
-          }
-          $certificate = Join-Path $env:RUNNER_TEMP "app-activity-signing.pfx"
-          [IO.File]::WriteAllBytes(
-            $certificate,
-            [Convert]::FromBase64String($env:CERTIFICATE_BASE64)
-          )
-          "SIGNING_CERTIFICATE_PATH=$certificate" >> $env:GITHUB_ENV
-          "SIGNING_CERTIFICATE_PASSWORD=$env:CERTIFICATE_PASSWORD" >> $env:GITHUB_ENV
-
       - name: Build installer
         shell: powershell
         run: .\build.ps1
@@ -78,8 +57,131 @@ jobs:
         shell: powershell
         run: python tools\mcp_smoke_test.py dist\AppActivity\AppActivity.exe mcp
 
+      - name: Upload unsigned application for signing
+        if: env.TRUSTED_BUILD == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: AppActivity-Unsigned-Build
+          path: |
+            dist/AppActivity
+            artifacts/AppActivity-update.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload unsigned installer
+        if: github.event_name == 'workflow_dispatch' && env.TRUSTED_BUILD != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: AppActivity-Windows-Installer
+          path: |
+            artifacts/AppActivity-Setup.exe
+            artifacts/AppActivity-update.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signs release tags through the SignPath Foundation open-source program. Only this job, in the
+  # "signing" environment (deployment policy: main and v* tags), can read the SignPath secrets.
+  # SignPath requires a manual approval for each signing request, so only v* tags are signed;
+  # main's nightly build and tags built before the SIGNPATH_* secrets exist are packaged unsigned.
+  sign:
+    needs: build
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    runs-on: windows-latest
+    timeout-minutes: 330
+    environment: signing
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SIGN_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.SIGNPATH_API_TOKEN != '' && secrets.SIGNPATH_ORGANIZATION_ID != '' }}
+      SIGNPATH_PROJECT_SLUG: app-activity
+      SIGNPATH_SIGNING_POLICY_SLUG: release-signing
+      # Leaves time for the maintainer to approve each request in SignPath.
+      SIGNPATH_APPROVAL_TIMEOUT_SECONDS: "9000"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: AppActivity-Unsigned-Build
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress --yes
+
+      - name: Report unsigned build
+        if: env.SIGN_RELEASE != 'true'
+        shell: powershell
+        run: |
+          if ($env:GITHUB_REF -like "refs/tags/v*") {
+            "::warning::SignPath is not configured; publishing an unsigned installer. See README 'Code signing policy'."
+          } else {
+            "::notice::Only v* release tags are signed; this build is published unsigned."
+          }
+
+      - name: Upload application for signing
+        id: upload-app
+        if: env.SIGN_RELEASE == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: AppActivity-Exe-Unsigned
+          path: dist/AppActivity/AppActivity.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign application
+        if: env.SIGN_RELEASE == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload-app.outputs.artifact-id }}
+          wait-for-completion-timeout-in-seconds: ${{ env.SIGNPATH_APPROVAL_TIMEOUT_SECONDS }}
+          output-artifact-directory: dist/AppActivity
+
+      - name: Build installer
+        shell: powershell
+        run: .\build.ps1 -Stage Installer
+
+      - name: Upload installer for signing
+        id: upload-installer
+        if: env.SIGN_RELEASE == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: AppActivity-Setup-Unsigned
+          path: artifacts/AppActivity-Setup.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign installer
+        if: env.SIGN_RELEASE == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload-installer.outputs.artifact-id }}
+          wait-for-completion-timeout-in-seconds: ${{ env.SIGNPATH_APPROVAL_TIMEOUT_SECONDS }}
+          output-artifact-directory: artifacts
+
+      - name: Verify signatures
+        if: env.SIGN_RELEASE == 'true'
+        shell: powershell
+        run: |
+          foreach ($file in "dist\AppActivity\AppActivity.exe", "artifacts\AppActivity-Setup.exe") {
+            $signature = Get-AuthenticodeSignature $file
+            if ($signature.Status -ne "Valid" -or -not $signature.TimeStamperCertificate) {
+              throw "$file is not validly signed and timestamped: $($signature.Status) $($signature.StatusMessage)"
+            }
+            "$file signed by $($signature.SignerCertificate.Subject)"
+          }
+
       - name: Upload installer
-        if: github.event_name == 'workflow_dispatch' || env.PUBLISH == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: AppActivity-Windows-Installer
@@ -90,9 +192,9 @@ jobs:
           retention-days: 1
 
   # The only job with write access. It runs no build code: it publishes the installer that the
-  # build job produced for a pushed tag or for main.
+  # sign job produced for a pushed tag or for main.
   publish:
-    needs: build
+    needs: sign
     if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: windows-latest
     permissions:
