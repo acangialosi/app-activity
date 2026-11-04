@@ -215,7 +215,10 @@ jobs:
         run: |
           $installer = "artifacts\AppActivity-Setup.exe"
           $metadata = "artifacts\AppActivity-update.json"
-          if (gh release view $env:GITHUB_REF_NAME 2>$null) {
+          $releases = @(
+            gh release list --limit 100 --json tagName | ConvertFrom-Json
+          )
+          if ($releases.tagName -contains $env:GITHUB_REF_NAME) {
             gh release upload $env:GITHUB_REF_NAME $installer $metadata --clobber
           } else {
             gh release create $env:GITHUB_REF_NAME $installer $metadata `
