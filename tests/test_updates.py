@@ -260,7 +260,7 @@ class UpdateTests(unittest.TestCase):
                     f"http://127.0.0.1.evil.example:{server.server_port}",
                 ):
                     with self.subTest(origin=origin):
-                        headers = {"Host": "example.com"}
+                        headers = {}
                         if origin is not None:
                             headers["Origin"] = origin
                         request = Request(f"{base}/api/update", method="POST", headers=headers)

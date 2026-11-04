@@ -46,7 +46,9 @@ The hour view shows five-minute buckets, with window-title details alongside.
   doesn't control other access: while App Activity is tracking, any program on
   this PC can read history from the dashboard at `http://127.0.0.1:8765`, which
   doesn't require sign-in, and programs running as you can open `activity.db`.
-  That includes agents that can fetch URLs, run commands, or read files. See
+  That includes agents that can fetch URLs, run commands, or read files. The
+  dashboard only answers requests addressed to `127.0.0.1` or `localhost`, which
+  stops websites from using DNS rebinding to read it through your browser. See
   [Use with AI agents (MCP)](#use-with-ai-agents-mcp).
 - Historical process-name entries are automatically merged into their resolved
   application display name when that application is next observed.
