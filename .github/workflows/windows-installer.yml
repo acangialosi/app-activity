@@ -27,9 +27,8 @@ jobs:
       - name: Run tests
         run: python -m unittest discover --start-directory tests --verbose
 
-  # Builds every change, but signs only trusted main and tag builds. Pull requests and other
-  # branches (including agent branches) build unsigned, receive no signing secrets, and cannot
-  # write to the repository; publishing happens in the separate publish job.
+  # Builds and smoke-tests every change unsigned. This job never has signing access or write
+  # access; trusted main and tag builds hand the unsigned app to the separate sign job.
   build:
     needs: test
     runs-on: windows-latest
@@ -37,7 +36,6 @@ jobs:
       contents: read
     env:
       TRUSTED_BUILD: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
-      PUBLISH: ${{ startsWith(github.ref, 'refs/tags/') || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,25 +49,6 @@ jobs:
         shell: powershell
         run: choco install innosetup --no-progress --yes
 
-      - name: Prepare signing certificate
-        if: env.TRUSTED_BUILD == 'true'
-        shell: powershell
-        env:
-          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          if (-not $env:CERTIFICATE_BASE64) {
-            "No signing certificate is configured; building unsigned."
-            exit 0
-          }
-          $certificate = Join-Path $env:RUNNER_TEMP "app-activity-signing.pfx"
-          [IO.File]::WriteAllBytes(
-            $certificate,
-            [Convert]::FromBase64String($env:CERTIFICATE_BASE64)
-          )
-          "SIGNING_CERTIFICATE_PATH=$certificate" >> $env:GITHUB_ENV
-          "SIGNING_CERTIFICATE_PASSWORD=$env:CERTIFICATE_PASSWORD" >> $env:GITHUB_ENV
-
       - name: Build installer
         shell: powershell
         run: .\build.ps1
@@ -78,8 +57,110 @@ jobs:
         shell: powershell
         run: python tools\mcp_smoke_test.py dist\AppActivity\AppActivity.exe mcp
 
+      - name: Upload unsigned application for signing
+        if: env.TRUSTED_BUILD == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: AppActivity-Unsigned-Build
+          path: |
+            dist/AppActivity
+            artifacts/AppActivity-update.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload unsigned installer
+        if: github.event_name == 'workflow_dispatch' && env.TRUSTED_BUILD != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: AppActivity-Windows-Installer
+          path: |
+            artifacts/AppActivity-Setup.exe
+            artifacts/AppActivity-update.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signs trusted main and tag builds with Azure Artifact Signing. Only this job can request an
+  # OIDC token, and only in the "signing" environment, whose deployment policy allows main and
+  # v* tags; Azure trusts only that environment's token. Until the ARTIFACT_SIGNING_* and AZURE_*
+  # variables are configured, it packages the installer unsigned so nightly builds still publish.
+  sign:
+    needs: build
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    runs-on: windows-latest
+    environment: signing
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SIGNING_CONFIGURED: ${{ vars.AZURE_CLIENT_ID != '' && vars.AZURE_TENANT_ID != '' && vars.AZURE_SUBSCRIPTION_ID != '' && vars.ARTIFACT_SIGNING_ENDPOINT != '' && vars.ARTIFACT_SIGNING_ACCOUNT != '' && vars.ARTIFACT_SIGNING_PROFILE != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: AppActivity-Unsigned-Build
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress --yes
+
+      - name: Report missing signing configuration
+        if: env.SIGNING_CONFIGURED != 'true'
+        shell: powershell
+        run: |
+          "::warning::Azure Artifact Signing is not configured; publishing an unsigned installer. See README 'Signing the installer'."
+
+      - name: Azure login
+        if: env.SIGNING_CONFIGURED == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign application
+        if: env.SIGNING_CONFIGURED == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\dist\AppActivity\AppActivity.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Build installer
+        shell: powershell
+        run: .\build.ps1 -Stage Installer
+
+      - name: Sign installer
+        if: env.SIGNING_CONFIGURED == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\artifacts\AppActivity-Setup.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify signatures
+        if: env.SIGNING_CONFIGURED == 'true'
+        shell: powershell
+        run: |
+          foreach ($file in "dist\AppActivity\AppActivity.exe", "artifacts\AppActivity-Setup.exe") {
+            $signature = Get-AuthenticodeSignature $file
+            if ($signature.Status -ne "Valid" -or -not $signature.TimeStamperCertificate) {
+              throw "$file is not validly signed and timestamped: $($signature.Status) $($signature.StatusMessage)"
+            }
+            "$file signed by $($signature.SignerCertificate.Subject)"
+          }
+
       - name: Upload installer
-        if: github.event_name == 'workflow_dispatch' || env.PUBLISH == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: AppActivity-Windows-Installer
@@ -90,9 +171,9 @@ jobs:
           retention-days: 1
 
   # The only job with write access. It runs no build code: it publishes the installer that the
-  # build job produced for a pushed tag or for main.
+  # sign job produced for a pushed tag or for main.
   publish:
-    needs: build
+    needs: sign
     if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: windows-latest
     permissions:

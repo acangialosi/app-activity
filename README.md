@@ -165,9 +165,10 @@ Pushing a `v*` tag creates a permanent versioned GitHub Release. Manual workflow
 runs produce a downloadable Actions artifact retained for one day without
 creating a release. Every push and pull request must pass the test suite before
 the installer is built, and publishing occurs only after both jobs succeed.
-Only builds of `main` and tags are signed; pull requests and other branches
-build unsigned without access to signing secrets, and only the separate publish
-job can write releases.
+Only builds of `main` and tags are signed, in a separate job that runs in the
+protected `signing` environment; pull requests and other branches build
+unsigned without signing access, and only the separate publish job can write
+releases. See [Signing the installer](#signing-the-installer).
 
 Updates are downloaded and installed manually; the app never downloads or runs
 an installer automatically. Open **Settings → Updates** and select **Check now** beside the update
@@ -191,7 +192,48 @@ winget install JRSoftware.InnoSetup
 
 The output is `artifacts\AppActivity-Setup.exe`. Set
 `SIGNING_CERTIFICATE_PATH` and optionally `SIGNING_CERTIFICATE_PASSWORD` to
-Authenticode-sign the application and installer during the build.
+Authenticode-sign the application and installer during a local build with a
+PFX certificate. `-Stage App` builds only `dist\AppActivity`, and
+`-Stage Installer` packages an existing `dist\AppActivity`.
+
+#### Signing the installer
+
+Windows SmartScreen warns about downloaded installers that are unsigned. CI
+signs `AppActivity.exe` and `AppActivity-Setup.exe` with
+[Azure Artifact Signing](https://learn.microsoft.com/azure/artifact-signing/)
+(Basic plan, about US$10/month), authenticating with GitHub OpenID Connect, so
+no certificate, password, or client secret is stored in GitHub. Until it is
+configured, `main` and tag builds publish unsigned installers with a warning.
+One-time setup:
+
+1. **Create the Artifact Signing resources** (Azure portal): register the
+   `Microsoft.CodeSigning` resource provider on your subscription, create an
+   Artifact Signing account (note its region endpoint, for example
+   `https://eus.codesigning.azure.net/`), then complete a **Public** identity
+   validation. Individual developers must be in the United States or Canada,
+   and validation can take up to 20 business days. Afterwards, create a
+   **Public Trust** certificate profile.
+2. **Create an identity for GitHub**: in Microsoft Entra ID, create an app
+   registration. Under **Certificates & secrets → Federated credentials**, add
+   a *GitHub Actions deploying Azure resources* credential with organization
+   `acangialosi`, repository `app-activity`, entity type **Environment**, and
+   environment `signing`.
+3. **Grant signing only**: on the certificate profile, assign the app
+   registration the **Artifact Signing Certificate Profile Signer** role.
+4. **Configure GitHub**: in **Settings → Environments → signing**, confirm the
+   deployment branch and tag policy allows only `main` and `v*`. Then add these
+   environment variables (they are identifiers, not secrets):
+   `AZURE_CLIENT_ID` (app registration client ID), `AZURE_TENANT_ID`,
+   `AZURE_SUBSCRIPTION_ID`, `ARTIFACT_SIGNING_ENDPOINT`,
+   `ARTIFACT_SIGNING_ACCOUNT`, and `ARTIFACT_SIGNING_PROFILE`.
+5. **Verify**: re-run the **Windows installer** workflow on `main`. The **sign**
+   job's *Verify signatures* step prints the signer. In File Explorer, the
+   downloaded installer's **Properties → Digital Signatures** shows your
+   validated name.
+
+Signed downloads show your name instead of "Unknown publisher." SmartScreen can
+still warn about a new signing identity until it builds reputation from
+downloads.
 
 ## Use with AI agents (MCP)
 
