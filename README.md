@@ -163,6 +163,9 @@ Pushing a `v*` tag creates a permanent versioned GitHub Release. Manual workflow
 runs produce a downloadable Actions artifact retained for one day without
 creating a release. Every push and pull request must pass the test suite before
 the installer is built, and publishing occurs only after both jobs succeed.
+Only builds of `main` and tags are signed; pull requests and other branches
+build unsigned without access to signing secrets, and only the separate publish
+job can write releases.
 
 Updates are downloaded and installed manually; the app never downloads or runs
 an installer automatically. Open **Settings → Updates** and select **Check now** beside the update
@@ -324,12 +327,33 @@ use most this week?"
 
 ## Development
 
+Development needs only Windows and Python 3.11 or newer (CI uses Python
+3.14); the app and its tests use the standard library. Optionally install
+Node.js and a Chromium browser such as Microsoft Edge to run the dashboard's
+JavaScript and layout tests, which are skipped otherwise. No virtual
+environment or package installation is required:
+
 ```powershell
+git clone https://github.com/acangialosi/app-activity.git
+cd app-activity
 python -m unittest discover -s tests -v
 ```
 
-When Node.js is available, the suite also runs the dashboard's JavaScript
-behavior tests. It also starts the MCP server from the source checkout and
+Run a single module while iterating, for example
+`python -m unittest tests.test_database -v`. The tests don't start tracking
+or change startup settings.
+
+To develop without side effects, avoid `install`, `start`, `run`, and
+`dashboard` (also the default with no command): they start tracking real
+activity, and `install` registers sign-in startup. Undo them with
+`.\app_activity.cmd uninstall`. `status` and `mcp` are safe to run. Building
+the installer with `.\build.ps1` installs the pinned PyInstaller from
+`requirements-build.txt` and needs Inno Setup.
+
+Pull requests use the [pull request template](.github/PULL_REQUEST_TEMPLATE.md).
+Coding agents also read [AGENTS.md](AGENTS.md).
+
+The full suite also starts the MCP server from the source checkout and
 exercises it over standard input and output. To check a packaged build the same
 way, run the following after `.\build.ps1`; CI runs it after building the
 installer:
