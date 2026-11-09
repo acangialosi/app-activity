@@ -19,10 +19,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "app-activity-ci-security"
-BETTERLEAKS_VERSION = "1.9.0"
+BETTERLEAKS_VERSION = "1.10.0"
 BETTERLEAKS_HASHES = {
-    "arm64": "3e5b9b6cdbfe8d486ae2dd2fa137473dc9ab42bf50317f051b73561121861816",
-    "x64": "b765daec9fda475b031b5a5159798cbe4294a3f2a50683cbc0471226e376d3da",
+    "arm64": "0799fdc4588a934fd5d727920117a5e0d5d24d2cdead55445e84c5619d201d9c",
+    "x64": "bafd52abcb440c2a06ea36d5e1fff217315db0aac517e60d74e64b2bb9f18468"
 }
 MINGIT_VERSION = "2.56.0.windows.4"
 MINGIT_HASHES = {
